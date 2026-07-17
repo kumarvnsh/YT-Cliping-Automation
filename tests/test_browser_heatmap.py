@@ -272,3 +272,31 @@ def test_fetch_rendered_heatmap_interrupts_a_stuck_evaluate_at_deadline(monkeypa
     assert time.monotonic() - started < 0.15
     assert context.closed
     assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+
+
+def test_rendered_heatmap_deadline_rearms_an_overdue_prior_alarm():
+    import browser_heatmap
+
+    original_handler = signal.getsignal(signal.SIGALRM)
+    original_delay, original_interval = signal.getitimer(signal.ITIMER_REAL)
+    fired = []
+
+    def prior_handler(_signum, _frame):
+        fired.append(True)
+
+    signal.signal(signal.SIGALRM, prior_handler)
+    signal.setitimer(signal.ITIMER_REAL, 0.01)
+    try:
+        with browser_heatmap._rendered_heatmap_deadline(0.1):
+            time.sleep(0.03)
+
+        restored_delay, restored_interval = signal.getitimer(signal.ITIMER_REAL)
+        assert restored_delay > 0
+        assert restored_interval == 0
+
+        time.sleep(0.03)
+        assert fired == [True]
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, original_handler)
+        signal.setitimer(signal.ITIMER_REAL, original_delay, original_interval)

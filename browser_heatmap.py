@@ -60,7 +60,11 @@ def _rendered_heatmap_deadline(seconds):
         elapsed = monotonic() - started
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
-        remaining_delay = max(0, previous_delay - elapsed)
+        remaining_delay = previous_delay - elapsed
+        if previous_delay and remaining_delay <= 0:
+            remaining_delay = 0.001
+        else:
+            remaining_delay = max(0, remaining_delay)
         signal.setitimer(signal.ITIMER_REAL, remaining_delay, previous_interval)
 
 
