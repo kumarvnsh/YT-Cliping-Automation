@@ -33,3 +33,20 @@ def test_pick_window_clamps_to_video_end():
                {"start_time": 0.0, "end_time": 10.0, "value": 0.1}]
     start = pipeline.pick_window(heatmap, duration=200)
     assert start <= 200 - pipeline.CLIP_SECONDS
+
+
+def test_gen_metadata_uses_openai(monkeypatch):
+    meta = {"title": "T", "description": "D", "hashtags": ["#shorts"], "hook": "H"}
+    monkeypatch.setattr(pipeline, "_openai_meta", lambda p: meta)
+    monkeypatch.setattr(pipeline, "_claude_meta",
+                        lambda p: (_ for _ in ()).throw(AssertionError("fallback used")))
+    assert pipeline.gen_metadata("src", "chan", "http://u")["title"] == "T"
+
+
+def test_gen_metadata_falls_back_to_claude(monkeypatch):
+    meta = {"title": "T2", "description": "D", "hashtags": [], "hook": "H"}
+    def boom(p):
+        raise RuntimeError("openai down")
+    monkeypatch.setattr(pipeline, "_openai_meta", boom)
+    monkeypatch.setattr(pipeline, "_claude_meta", lambda p: meta)
+    assert pipeline.gen_metadata("src", "chan", "http://u")["title"] == "T2"

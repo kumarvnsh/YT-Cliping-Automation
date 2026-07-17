@@ -51,3 +51,51 @@ def pick_window(heatmap, duration, clip=CLIP_SECONDS):
         if score > best_score:
             best_score, best_start = score, start
     return best_start
+
+
+META_SYSTEM = (
+    "You write YouTube Shorts metadata for gaming clip videos. "
+    "Respond with ONLY a JSON object with keys: "
+    "title (string, <100 chars, hooky), "
+    "description (string, MUST include the provided source credit line), "
+    "hashtags (list of strings incl. #shorts #gaming), "
+    "hook (string, <40 chars, on-screen text)."
+)
+
+
+def _prompt(src_title, src_channel, src_url):
+    return (f'Source video: "{src_title}" by {src_channel}.\n'
+            f'Source credit line to include in description: '
+            f'"Credit: {src_channel} — {src_url}"')
+
+
+def _openai_meta(prompt):
+    from openai import OpenAI
+    r = OpenAI().chat.completions.create(
+        model="gpt-4o-mini",
+        response_format={"type": "json_object"},
+        messages=[{"role": "system", "content": META_SYSTEM},
+                  {"role": "user", "content": prompt}])
+    return json.loads(r.choices[0].message.content)
+
+
+def _claude_meta(prompt):
+    import anthropic
+    r = anthropic.Anthropic().messages.create(
+        model="claude-haiku-4-5", max_tokens=1000,
+        system=META_SYSTEM,
+        messages=[{"role": "user", "content": prompt}])
+    return json.loads(r.content[0].text)
+
+
+def gen_metadata(src_title, src_channel, src_url):
+    prompt = _prompt(src_title, src_channel, src_url)
+    try:
+        meta = _openai_meta(prompt)
+    except Exception as e:
+        print(f"OpenAI failed ({e}); falling back to Claude", file=sys.stderr)
+        meta = _claude_meta(prompt)
+    for key in ("title", "description", "hashtags", "hook"):
+        if key not in meta:
+            raise ValueError(f"metadata missing {key}: {meta}")
+    return meta
