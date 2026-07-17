@@ -35,6 +35,17 @@ def parse_duration(iso: str) -> int:
     return h * 3600 + mn * 60 + s
 
 
+_VIDEO_ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})")
+
+
+def parse_video_id(url):
+    """Extract the 11-char video id from watch?v=, youtu.be/, or /shorts/ URLs."""
+    m = _VIDEO_ID_RE.search(url)
+    if not m:
+        raise ValueError(f"cannot parse video id from url: {url!r}")
+    return m.group(1)
+
+
 def eligible(items, used):
     return [v for v in items
             if v["id"] not in used

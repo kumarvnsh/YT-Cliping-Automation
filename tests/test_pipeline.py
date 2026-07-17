@@ -495,3 +495,15 @@ def test_workflow_sets_up_writable_python_tool_cache_on_mac_runner():
 
 def test_attempt_limit_checks_ten_trending_candidates():
     assert pipeline.MAX_ATTEMPTS == 10
+
+
+def test_parse_video_id_handles_all_url_forms():
+    assert pipeline.parse_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert pipeline.parse_video_id("https://youtu.be/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert pipeline.parse_video_id("https://www.youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert pipeline.parse_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") == "dQw4w9WgXcQ"
+
+
+def test_parse_video_id_rejects_junk():
+    with pytest.raises(ValueError):
+        pipeline.parse_video_id("not a url")
