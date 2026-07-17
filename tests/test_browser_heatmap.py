@@ -1,6 +1,4 @@
 from http.cookiejar import Cookie
-import signal
-import time
 
 import pytest
 
@@ -68,7 +66,123 @@ def test_playwright_cookies_converts_chromium_microsecond_epoch_expiry():
     ] == expected_expiry
 
 
-def test_fetch_rendered_heatmap_normalizes_browser_markers_and_closes_context(monkeypatch):
+def _install_worker_process(monkeypatch, browser_heatmap, payload, *, alive=False):
+    """Replace multiprocessing's spawn boundary without starting a browser."""
+    class Receiver:
+        closed = False
+        polls = []
+
+        def poll(self, timeout):
+            self.polls.append(timeout)
+            return True
+
+        def recv(self):
+            return payload
+
+        def close(self):
+            self.closed = True
+
+    class Sender:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    receiver = Receiver()
+    sender = Sender()
+
+    class Process:
+        started = False
+        joins = []
+        terminated = False
+
+        def start(self):
+            self.started = True
+
+        def join(self, timeout=None):
+            self.joins.append(timeout)
+
+        def is_alive(self):
+            return alive
+
+        def terminate(self):
+            self.terminated = True
+
+    process = Process()
+
+    class Context:
+        process_args = None
+
+        def Pipe(self, *, duplex):
+            assert duplex is False
+            return receiver, sender
+
+        def Process(self, *, target, args):
+            assert target is browser_heatmap._rendered_heatmap_worker
+            self.process_args = args
+            return process
+
+    context = Context()
+    monkeypatch.setattr(browser_heatmap.multiprocessing, "get_context", lambda name: (
+        name == "spawn" and context
+    ))
+    monkeypatch.setattr(
+        browser_heatmap,
+        "load_youtube_cookies",
+        lambda _path: (_ for _ in ()).throw(AssertionError("parent loaded cookies")),
+    )
+    return context, process, receiver, sender
+
+
+def test_fetch_rendered_heatmap_returns_a_valid_worker_result(monkeypatch):
+    import browser_heatmap
+
+    result = [{"start_time": 5.0, "end_time": 7.0, "value": 0.75}]
+    context, process, receiver, sender = _install_worker_process(
+        monkeypatch, browser_heatmap, {"ok": True, "result": result}
+    )
+    assert browser_heatmap.fetch_rendered_heatmap("abc123", "cookies.txt") == [{
+        "start_time": 5.0,
+        "end_time": 7.0,
+        "value": 0.75,
+    }]
+    assert context.process_args[0:2] == ("abc123", "cookies.txt")
+    assert context.process_args[2] is sender
+    assert process.started
+    assert process.joins == [browser_heatmap.RENDERED_HEATMAP_WORKER_TIMEOUT_SECONDS]
+    assert receiver.closed
+    assert sender.closed
+
+
+def test_fetch_rendered_heatmap_terminates_and_reaps_an_overrunning_worker(monkeypatch):
+    import browser_heatmap
+
+    _context, process, _receiver, _sender = _install_worker_process(
+        monkeypatch, browser_heatmap, None, alive=True
+    )
+
+    assert browser_heatmap.fetch_rendered_heatmap("abc123", "cookies.txt") == []
+    assert process.terminated
+    assert process.joins == [
+        browser_heatmap.RENDERED_HEATMAP_WORKER_TIMEOUT_SECONDS,
+        None,
+    ]
+
+
+def test_fetch_rendered_heatmap_propagates_worker_errors(monkeypatch):
+    import browser_heatmap
+
+    _install_worker_process(
+        monkeypatch,
+        browser_heatmap,
+        {"ok": False, "error": "RuntimeError while reading rendered player"},
+    )
+
+    with pytest.raises(browser_heatmap.RenderedHeatmapWorkerError, match="RuntimeError"):
+        browser_heatmap.fetch_rendered_heatmap("abc123", "cookies.txt")
+
+
+def test_worker_retries_transient_evaluate_navigation_error_and_closes_context(monkeypatch):
     import browser_heatmap
 
     raw_markers = [{
@@ -78,126 +192,20 @@ def test_fetch_rendered_heatmap_normalizes_browser_markers_and_closes_context(mo
     }]
 
     class Page:
-        def goto(self, url, *, wait_until, timeout):
-            assert url == "https://www.youtube.com/watch?v=abc123"
-            assert wait_until == "domcontentloaded"
-            assert timeout == 20_000
-
-        def evaluate(self, script):
-            assert script == browser_heatmap.PLAYER_MARKERS_SCRIPT
-            return raw_markers
-
-        def wait_for_timeout(self, timeout):
-            raise AssertionError(f"unexpected poll wait: {timeout}")
-
-    class Context:
-        closed = False
-
-        def add_cookies(self, cookies):
-            assert cookies == [{"name": "SID"}]
-
-        def new_page(self):
-            return Page()
-
-        def close(self):
-            self.closed = True
-
-    context = Context()
-
-    class Chromium:
-        def launch_persistent_context(self, profile, **kwargs):
-            assert kwargs == {
-                "executable_path": browser_heatmap.BRAVE_EXECUTABLE,
-                "headless": False,
-                "args": ["--no-first-run", "--no-default-browser-check"],
-            }
-            return context
-
-    class Playwright:
-        chromium = Chromium()
-
-    class PlaywrightManager:
-        def __enter__(self):
-            return Playwright()
-
-        def __exit__(self, *_args):
-            return False
-
-    monkeypatch.setattr(browser_heatmap, "load_youtube_cookies", lambda _path: [{"name": "SID"}])
-    monkeypatch.setattr(browser_heatmap, "sync_playwright", lambda: PlaywrightManager())
-
-    assert browser_heatmap.fetch_rendered_heatmap("abc123", "cookies.txt") == [{
-        "start_time": 5.0,
-        "end_time": 7.0,
-        "value": 0.75,
-    }]
-    assert context.closed
-
-
-@pytest.mark.parametrize("failure", ["goto", "evaluate"])
-def test_fetch_rendered_heatmap_closes_context_when_browser_errors(monkeypatch, failure):
-    import browser_heatmap
-
-    class Page:
-        def goto(self, *_args, **_kwargs):
-            if failure == "goto":
-                raise RuntimeError("goto failed")
-
-        def evaluate(self, _script):
-            if failure == "evaluate":
-                raise RuntimeError("evaluate failed")
-            return []
-
-    class Context:
-        closed = False
-
-        def add_cookies(self, _cookies):
-            pass
-
-        def new_page(self):
-            return Page()
-
-        def close(self):
-            self.closed = True
-
-    context = Context()
-
-    class Chromium:
-        def launch_persistent_context(self, *_args, **_kwargs):
-            return context
-
-    class Playwright:
-        chromium = Chromium()
-
-    class PlaywrightManager:
-        def __enter__(self):
-            return Playwright()
-
-        def __exit__(self, *_args):
-            return False
-
-    monkeypatch.setattr(browser_heatmap, "load_youtube_cookies", lambda _path: [{"name": "SID"}])
-    monkeypatch.setattr(browser_heatmap, "sync_playwright", lambda: PlaywrightManager())
-
-    with pytest.raises(RuntimeError, match=f"{failure} failed"):
-        browser_heatmap.fetch_rendered_heatmap("abc123", "cookies.txt")
-
-    assert context.closed
-
-
-def test_fetch_rendered_heatmap_returns_empty_after_no_marker_polling_timeout(monkeypatch):
-    import browser_heatmap
-
-    class Page:
         evaluations = 0
         waits = []
 
         def goto(self, *_args, **_kwargs):
             pass
 
-        def evaluate(self, _script):
+        def evaluate(self, script):
+            assert script == browser_heatmap.PLAYER_MARKERS_SCRIPT
             self.evaluations += 1
-            return []
+            if self.evaluations == 1:
+                raise RuntimeError(
+                    "Page.evaluate: Execution context was destroyed, most likely because of a navigation"
+                )
+            return raw_markers
 
         def wait_for_timeout(self, timeout):
             self.waits.append(timeout)
@@ -232,170 +240,14 @@ def test_fetch_rendered_heatmap_returns_empty_after_no_marker_polling_timeout(mo
         def __exit__(self, *_args):
             return False
 
-    monotonic_times = iter([0, 0, browser_heatmap.RENDERED_HEATMAP_TIMEOUT_SECONDS])
     monkeypatch.setattr(browser_heatmap, "load_youtube_cookies", lambda _path: [{"name": "SID"}])
     monkeypatch.setattr(browser_heatmap, "sync_playwright", lambda: PlaywrightManager())
-    monkeypatch.setattr(browser_heatmap.time, "monotonic", lambda: next(monotonic_times))
 
-    assert browser_heatmap.fetch_rendered_heatmap("abc123", "cookies.txt") == []
+    assert browser_heatmap._fetch_rendered_heatmap_in_worker("abc123", "cookies.txt") == [{
+        "start_time": 5.0,
+        "end_time": 7.0,
+        "value": 0.75,
+    }]
     assert page.evaluations == 2
     assert page.waits == [1_000]
     assert context.closed
-
-
-def test_fetch_rendered_heatmap_interrupts_a_stuck_evaluate_at_deadline(monkeypatch):
-    import browser_heatmap
-
-    class Page:
-        def goto(self, *_args, **_kwargs):
-            pass
-
-        def evaluate(self, _script):
-            time.sleep(0.2)
-            return []
-
-        def wait_for_timeout(self, _timeout):
-            pass
-
-    class Context:
-        closed = False
-
-        def add_cookies(self, _cookies):
-            pass
-
-        def new_page(self):
-            return Page()
-
-        def close(self):
-            self.closed = True
-
-    context = Context()
-
-    class Chromium:
-        def launch_persistent_context(self, *_args, **_kwargs):
-            return context
-
-    class Playwright:
-        chromium = Chromium()
-
-    class PlaywrightManager:
-        def __enter__(self):
-            return Playwright()
-
-        def __exit__(self, *_args):
-            return False
-
-    monkeypatch.setattr(browser_heatmap, "load_youtube_cookies", lambda _path: [{"name": "SID"}])
-    monkeypatch.setattr(browser_heatmap, "sync_playwright", lambda: PlaywrightManager())
-    monkeypatch.setattr(browser_heatmap, "RENDERED_HEATMAP_TIMEOUT_SECONDS", 0.05)
-
-    started = time.monotonic()
-    assert browser_heatmap.fetch_rendered_heatmap("abc123", "cookies.txt") == []
-    assert time.monotonic() - started < 0.15
-    assert context.closed
-    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
-
-
-def test_rendered_heatmap_deadline_rearms_an_overdue_prior_alarm():
-    import browser_heatmap
-
-    original_handler = signal.getsignal(signal.SIGALRM)
-    original_delay, original_interval = signal.getitimer(signal.ITIMER_REAL)
-    fired = []
-
-    def prior_handler(_signum, _frame):
-        fired.append(True)
-
-    signal.signal(signal.SIGALRM, prior_handler)
-    signal.setitimer(signal.ITIMER_REAL, 0.01)
-    try:
-        with browser_heatmap._rendered_heatmap_deadline(0.1):
-            time.sleep(0.03)
-
-        restored_delay, restored_interval = signal.getitimer(signal.ITIMER_REAL)
-        assert restored_delay > 0
-        assert restored_interval == 0
-
-        time.sleep(0.03)
-        assert fired == [True]
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, original_handler)
-        signal.setitimer(signal.ITIMER_REAL, original_delay, original_interval)
-
-
-def test_fetch_rendered_heatmap_bounds_blocking_close_after_timeout(monkeypatch):
-    import browser_heatmap
-
-    original_handler = signal.getsignal(signal.SIGALRM)
-    original_delay, original_interval = signal.getitimer(signal.ITIMER_REAL)
-    prior_fired = []
-
-    def prior_handler(_signum, _frame):
-        prior_fired.append(True)
-
-    class Page:
-        def goto(self, *_args, **_kwargs):
-            pass
-
-        def evaluate(self, _script):
-            time.sleep(0.2)
-            return []
-
-        def wait_for_timeout(self, _timeout):
-            pass
-
-    class Context:
-        close_started = False
-
-        def add_cookies(self, _cookies):
-            pass
-
-        def new_page(self):
-            return Page()
-
-        def close(self):
-            self.close_started = True
-            time.sleep(0.2)
-
-    context = Context()
-
-    class Chromium:
-        def launch_persistent_context(self, *_args, **_kwargs):
-            return context
-
-    class Playwright:
-        chromium = Chromium()
-
-    class PlaywrightManager:
-        exited = False
-
-        def __enter__(self):
-            return Playwright()
-
-        def __exit__(self, *_args):
-            self.exited = True
-            return False
-
-    manager = PlaywrightManager()
-    signal.signal(signal.SIGALRM, prior_handler)
-    signal.setitimer(signal.ITIMER_REAL, 1)
-    try:
-        monkeypatch.setattr(browser_heatmap, "load_youtube_cookies", lambda _path: [{"name": "SID"}])
-        monkeypatch.setattr(browser_heatmap, "sync_playwright", lambda: manager)
-        monkeypatch.setattr(browser_heatmap, "RENDERED_HEATMAP_TIMEOUT_SECONDS", 0.05)
-
-        started = time.monotonic()
-        assert browser_heatmap.fetch_rendered_heatmap("abc123", "cookies.txt") == []
-        assert time.monotonic() - started < 0.15
-        assert context.close_started
-        assert manager.exited
-        assert signal.getsignal(signal.SIGALRM) is prior_handler
-        restored_delay, restored_interval = signal.getitimer(signal.ITIMER_REAL)
-        assert restored_delay > 0
-        assert restored_interval == 0
-        assert prior_fired == []
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, original_handler)
-        signal.setitimer(signal.ITIMER_REAL, original_delay, original_interval)
