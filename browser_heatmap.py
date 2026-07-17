@@ -100,7 +100,7 @@ def playwright_cookies(cookies):
             "path": cookie.path or "/",
             "secure": bool(cookie.secure),
             "httpOnly": any(key.lower() == "httponly" for key in cookie._rest),
-            "expires": cookie.expires if cookie.expires is not None else -1,
+            "expires": cookie.expires if cookie.expires and cookie.expires > 0 else -1,
         })
     return records
 

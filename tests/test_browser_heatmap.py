@@ -46,6 +46,17 @@ def test_playwright_cookies_limits_records_to_youtube_domains():
     }]
 
 
+def test_playwright_cookies_maps_zero_expiry_to_session_cookie():
+    from browser_heatmap import playwright_cookies
+
+    cookies = [
+        _cookie(".youtube.com", expires=0),
+        _cookie("accounts.youtube.com", expires=123),
+    ]
+
+    assert [cookie["expires"] for cookie in playwright_cookies(cookies)] == [-1, 123]
+
+
 def test_fetch_rendered_heatmap_normalizes_browser_markers_and_closes_context(monkeypatch):
     import browser_heatmap
 
