@@ -375,9 +375,11 @@ def test_workflow_sets_up_writable_python_tool_cache_on_mac_runner():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/daily.yml").read_text()
 
-    assert "runner.temp" not in workflow
-    assert 'echo "RUNNER_TOOL_CACHE=$RUNNER_TEMP/tool-cache" >> "$GITHUB_ENV"' in workflow
-    assert 'mkdir -p "$RUNNER_TEMP/tool-cache"' in workflow
+    assert "actions/setup-python" not in workflow
+    assert "python3 -m venv .venv" in workflow
+    assert ".venv/bin/python -m pip install -r requirements.txt" in workflow
+    assert ".venv/bin/python export_cookies.py" in workflow
+    assert ".venv/bin/python pipeline.py" in workflow
 
 
 def test_attempt_limit_checks_ten_trending_candidates():

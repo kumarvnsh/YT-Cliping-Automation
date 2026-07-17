@@ -20,13 +20,10 @@ jobs:
     runs-on: [self-hosted, macOS, yt-shorts]
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare Python tool cache
+      - name: Create local Python environment
         run: |
-          echo "RUNNER_TOOL_CACHE=$RUNNER_TEMP/tool-cache" >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tool-cache"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+          python3 --version
+          python3 -m venv .venv
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.3.0
@@ -34,15 +31,15 @@ jobs:
         run: |
           command -v ffmpeg
           ffmpeg -hide_banner -filters | grep -q drawtext
-      - run: pip install -r requirements.txt
+      - run: .venv/bin/python -m pip install -r requirements.txt
       - name: Export local Brave cookies
-        run: python export_cookies.py
+        run: .venv/bin/python export_cookies.py
       - name: Run pipeline
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            python pipeline.py --dry-run
+            .venv/bin/python pipeline.py --dry-run
           else
-            python pipeline.py
+            .venv/bin/python pipeline.py
           fi
         env:
           YT_API_KEY: ${{ secrets.YT_API_KEY }}
