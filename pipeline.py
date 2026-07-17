@@ -34,3 +34,20 @@ def fetch_trending(api_key):
                             videoCategoryId="20", regionCode="US",
                             maxResults=25).execute()
     return resp["items"]
+
+
+def pick_window(heatmap, duration, clip=CLIP_SECONDS):
+    """Return clip start second: window with highest summed most-replayed value.
+
+    heatmap: yt-dlp info-JSON entries {start_time, end_time, value}.
+    ponytail: O(n^2) scan; heatmaps are ~100 entries, fine forever.
+    """
+    best_start, best_score = 0.0, -1.0
+    for h in heatmap:
+        start = min(h["start_time"], max(0.0, duration - clip))
+        end = start + clip
+        score = sum(x["value"] for x in heatmap
+                    if x["start_time"] < end and x["end_time"] > start)
+        if score > best_score:
+            best_score, best_start = score, start
+    return best_start
