@@ -7,7 +7,9 @@ import re
 import subprocess
 import sys
 import tempfile
+from http.cookiejar import MozillaCookieJar
 from pathlib import Path
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 CLIP_SECONDS = 35
 MIN_SOURCE_SECONDS = 120
@@ -56,6 +58,10 @@ def pick_window(heatmap, duration, clip=CLIP_SECONDS):
 
 
 HEAT_MARKER_RE = re.compile(r'"heatMarkerRenderer"\s*:\s*')
+WATCH_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+)
 
 
 def _number(value):
@@ -95,6 +101,24 @@ def parse_watch_heatmap(html):
         markers.append({"start_time": float(start), "end_time": float(end),
                         "value": float(value)})
     return sorted(markers, key=lambda marker: (marker["start_time"], marker["end_time"]))
+
+
+def fetch_watch_heatmap(video_id):
+    """Fetch a watch page with local cookies and extract its heat markers."""
+    cookie_file = Path("cookies.txt")
+    jar = MozillaCookieJar()
+    if cookie_file.exists():
+        jar = MozillaCookieJar(str(cookie_file))
+        jar.load(ignore_discard=True, ignore_expires=True)
+    opener = build_opener(HTTPCookieProcessor(jar))
+    request = Request(
+        f"https://www.youtube.com/watch?v={video_id}",
+        headers={"User-Agent": WATCH_USER_AGENT,
+                 "Accept-Language": "en-US,en;q=0.9"},
+    )
+    with opener.open(request, timeout=20) as response:
+        html = response.read().decode("utf-8", errors="replace")
+    return parse_watch_heatmap(html)
 
 
 META_SYSTEM = (
@@ -246,11 +270,12 @@ def main():
     for video in candidates[:MAX_ATTEMPTS]:
         vid = video["id"]
         try:
-            src, info = download(vid)
-            heatmap = info.get("heatmap")
+            heatmap = fetch_watch_heatmap(vid)
             if not heatmap:
                 raise ValueError("no heatmap")
-            start = pick_window(heatmap, info["duration"])
+            duration = parse_duration(video["contentDetails"]["duration"])
+            start = pick_window(heatmap, duration)
+            src, _info = download(vid)
             title = video["snippet"]["title"]
             channel = video["snippet"]["channelTitle"]
             url = f"https://www.youtube.com/watch?v={vid}"

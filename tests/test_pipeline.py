@@ -102,6 +102,34 @@ def test_parse_watch_heatmap_ignores_oversized_integer_literals():
     assert pipeline.parse_watch_heatmap(html) == []
 
 
+def test_fetch_watch_heatmap_uses_watch_url_and_parses_response(monkeypatch):
+    class Response:
+        def read(self):
+            return b'''{"heatMarkerRenderer": {"timeRangeStartMillis": 0,
+                "markerDurationMillis": 5000,
+                "heatMarkerIntensityScoreNormalized": 1}}'''
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    calls = []
+
+    class Opener:
+        def open(self, request, timeout):
+            calls.append((request.full_url, timeout))
+            return Response()
+
+    monkeypatch.setattr(pipeline, "build_opener", lambda *_handlers: Opener())
+
+    assert pipeline.fetch_watch_heatmap("abc123") == [
+        {"start_time": 0.0, "end_time": 5.0, "value": 1.0},
+    ]
+    assert calls == [("https://www.youtube.com/watch?v=abc123", 20)]
+
+
 def test_gen_metadata_uses_openai(monkeypatch):
     meta = {"title": "T", "description": "D", "hashtags": ["#shorts"], "hook": "H"}
     monkeypatch.setattr(pipeline, "_openai_meta", lambda p: meta)
@@ -154,6 +182,9 @@ def test_bookkeeping_failure_after_upload_does_not_try_next_candidate(tmp_path, 
     monkeypatch.setattr(pipeline, "USED_FILE", used_file)
     monkeypatch.setattr(pipeline, "LOG_FILE", tmp_path / "log.jsonl")
     monkeypatch.setattr(pipeline, "fetch_trending", lambda _key: [first, second])
+    monkeypatch.setattr(pipeline, "fetch_watch_heatmap", lambda _vid: [
+        {"start_time": 0, "end_time": 10, "value": 1},
+    ])
     monkeypatch.setattr(pipeline, "download", lambda vid: (tmp_path / f"{vid}.mp4", {
         "duration": 600,
         "heatmap": [{"start_time": 0, "end_time": 10, "value": 1}],
@@ -172,6 +203,41 @@ def test_bookkeeping_failure_after_upload_does_not_try_next_candidate(tmp_path, 
         pipeline.main()
 
     assert len(attempted_uploads) == 1
+
+
+def test_main_skips_no_heatmap_before_downloading(tmp_path, monkeypatch):
+    used_file = tmp_path / "used_videos.json"
+    used_file.write_text("[]")
+    first, second = _vid("first", "PT10M"), _vid("second", "PT10M")
+    downloaded = []
+
+    monkeypatch.setattr(pipeline, "USED_FILE", used_file)
+    monkeypatch.setattr(pipeline, "LOG_FILE", tmp_path / "log.jsonl")
+    monkeypatch.setattr(pipeline, "fetch_trending", lambda _key: [first, second])
+    monkeypatch.setattr(
+        pipeline,
+        "fetch_watch_heatmap",
+        lambda vid: [] if vid == "first" else [
+            {"start_time": 0, "end_time": 10, "value": 1},
+        ],
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "download",
+        lambda vid: (downloaded.append(vid) or tmp_path / f"{vid}.mp4", {}),
+    )
+    monkeypatch.setattr(pipeline, "gen_metadata", lambda *_args: {
+        "title": "title", "description": "description", "hashtags": [], "hook": "hook",
+    })
+    monkeypatch.setattr(pipeline, "edit", lambda *_args: None)
+    monkeypatch.setattr(pipeline, "self_check", lambda _path: None)
+    monkeypatch.setattr(pipeline, "upload", lambda *_args: "id")
+    monkeypatch.setattr(sys, "argv", ["pipeline.py", "--dry-run"])
+    monkeypatch.setenv("YT_API_KEY", "test-key")
+
+    pipeline.main()
+
+    assert downloaded == ["second"]
 
 
 def test_workflow_provisions_youtube_challenge_dependencies():
