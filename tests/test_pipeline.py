@@ -507,3 +507,15 @@ def test_parse_video_id_handles_all_url_forms():
 def test_parse_video_id_rejects_junk():
     with pytest.raises(ValueError):
         pipeline.parse_video_id("not a url")
+
+
+def test_parse_timestamp_handles_all_formats():
+    assert pipeline.parse_timestamp("90") == 90
+    assert pipeline.parse_timestamp("1:30") == 90
+    assert pipeline.parse_timestamp("1:02:03") == 3723
+
+
+@pytest.mark.parametrize("bad", ["", "-5", "1:2:3:4", "abc", "1:xx"])
+def test_parse_timestamp_rejects_junk(bad):
+    with pytest.raises(ValueError):
+        pipeline.parse_timestamp(bad)

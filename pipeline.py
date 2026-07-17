@@ -46,6 +46,17 @@ def parse_video_id(url):
     return m.group(1)
 
 
+def parse_timestamp(ts):
+    """Parse SS, MM:SS, or HH:MM:SS into seconds. Rejects negatives and junk."""
+    parts = ts.strip().split(":")
+    if len(parts) > 3 or not all(p.isdigit() for p in parts):
+        raise ValueError(f"bad timestamp: {ts!r}")
+    seconds = 0
+    for p in parts:
+        seconds = seconds * 60 + int(p)
+    return seconds
+
+
 def eligible(items, used):
     return [v for v in items
             if v["id"] not in used
