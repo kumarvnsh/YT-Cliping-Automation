@@ -519,3 +519,66 @@ def test_parse_timestamp_handles_all_formats():
 def test_parse_timestamp_rejects_junk(bad):
     with pytest.raises(ValueError):
         pipeline.parse_timestamp(bad)
+
+
+def test_run_manual_clips_at_parsed_start_and_uploads_once(tmp_path, monkeypatch):
+    edits = []
+    uploads = []
+    logged = []
+
+    monkeypatch.setattr(pipeline, "WORK", tmp_path)
+    monkeypatch.setattr(pipeline, "download", lambda vid: (
+        tmp_path / f"{vid}.mp4", {"title": "T", "uploader": "Chan", "duration": 600}))
+    monkeypatch.setattr(pipeline, "gen_metadata", lambda *_a: {
+        "title": "T", "description": "D", "hashtags": [], "hook": "HOOK"})
+    monkeypatch.setattr(pipeline, "edit",
+                        lambda src, start, hook, credit, out: edits.append((start, hook, credit)))
+    monkeypatch.setattr(pipeline, "self_check", lambda _p: None)
+    monkeypatch.setattr(pipeline, "upload", lambda path, meta, privacy: uploads.append(privacy) or "id")
+    monkeypatch.setattr(pipeline, "log_run", lambda entry: logged.append(entry))
+
+    pipeline.run_manual("https://youtu.be/dQw4w9WgXcQ", 120, "public")
+
+    assert edits == [(120, "HOOK", "Credit: Chan")]
+    assert uploads == ["public"]
+    assert logged[-1]["method"] == "manual"
+
+
+def test_run_manual_clamps_start_past_end(tmp_path, monkeypatch):
+    edits = []
+
+    monkeypatch.setattr(pipeline, "WORK", tmp_path)
+    monkeypatch.setattr(pipeline, "download", lambda vid: (
+        tmp_path / f"{vid}.mp4", {"title": "T", "uploader": "Chan", "duration": 100}))
+    monkeypatch.setattr(pipeline, "gen_metadata", lambda *_a: {
+        "title": "T", "description": "D", "hashtags": [], "hook": "H"})
+    monkeypatch.setattr(pipeline, "edit",
+                        lambda src, start, hook, credit, out: edits.append(start))
+    monkeypatch.setattr(pipeline, "self_check", lambda _p: None)
+    monkeypatch.setattr(pipeline, "upload", lambda *_a: "id")
+    monkeypatch.setattr(pipeline, "log_run", lambda _e: None)
+
+    # start 90 in a 100s source: clamp to duration - CLIP_SECONDS = 65
+    pipeline.run_manual("https://youtu.be/dQw4w9WgXcQ", 90, "public")
+
+    assert edits == [65]
+
+
+def test_run_manual_does_not_touch_used_videos(tmp_path, monkeypatch):
+    used_file = tmp_path / "used_videos.json"
+    used_file.write_text("[]")
+
+    monkeypatch.setattr(pipeline, "WORK", tmp_path)
+    monkeypatch.setattr(pipeline, "USED_FILE", used_file)
+    monkeypatch.setattr(pipeline, "download", lambda vid: (
+        tmp_path / f"{vid}.mp4", {"title": "T", "uploader": "Chan", "duration": 600}))
+    monkeypatch.setattr(pipeline, "gen_metadata", lambda *_a: {
+        "title": "T", "description": "D", "hashtags": [], "hook": "H"})
+    monkeypatch.setattr(pipeline, "edit", lambda *_a: None)
+    monkeypatch.setattr(pipeline, "self_check", lambda _p: None)
+    monkeypatch.setattr(pipeline, "upload", lambda *_a: "id")
+    monkeypatch.setattr(pipeline, "log_run", lambda _e: None)
+
+    pipeline.run_manual("https://youtu.be/dQw4w9WgXcQ", 10, "public")
+
+    assert used_file.read_text() == "[]"
