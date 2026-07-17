@@ -1,5 +1,6 @@
 import pipeline
 import json
+import signal
 import sys
 from pathlib import Path
 
@@ -145,6 +146,46 @@ def test_fetch_watch_heatmap_uses_watch_url_and_parses_response(monkeypatch):
         {"start_time": 0.0, "end_time": 5.0, "value": 1.0},
     ]
     assert calls == [("https://www.youtube.com/watch?v=abc123", 20)]
+
+
+def test_fetch_watch_heatmap_enforces_total_response_deadline(monkeypatch):
+    handlers = []
+    timers = []
+
+    class Response:
+        def read(self):
+            handlers[-1](signal.SIGALRM, None)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Opener:
+        def open(self, _request, timeout):
+            assert timeout == pipeline.WATCH_PAGE_SOCKET_TIMEOUT
+            return Response()
+
+    monkeypatch.setattr(pipeline, "build_opener", lambda *_handlers: Opener())
+    monkeypatch.setattr(
+        pipeline.signal,
+        "signal",
+        lambda _signal, handler: handlers.append(handler) or signal.SIG_DFL,
+    )
+    monkeypatch.setattr(
+        pipeline.signal,
+        "setitimer",
+        lambda *args: timers.append(args),
+    )
+
+    with pytest.raises(TimeoutError, match="watch-page request exceeded"):
+        pipeline.fetch_watch_heatmap("abc123")
+
+    assert timers == [
+        (signal.ITIMER_REAL, pipeline.WATCH_PAGE_TOTAL_TIMEOUT),
+        (signal.ITIMER_REAL, 0),
+    ]
 
 
 def test_gen_metadata_uses_openai(monkeypatch):

@@ -4,9 +4,11 @@ import json
 import math
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 from urllib.request import HTTPCookieProcessor, Request, build_opener
@@ -62,6 +64,8 @@ WATCH_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 )
+WATCH_PAGE_SOCKET_TIMEOUT = 20
+WATCH_PAGE_TOTAL_TIMEOUT = 30
 
 
 def _number(value):
@@ -109,6 +113,21 @@ def parse_watch_heatmap(html):
     return sorted(markers, key=lambda marker: (marker["start_time"], marker["end_time"]))
 
 
+@contextmanager
+def _watch_page_deadline():
+    """Bound the full watch-page request, including a slow response body."""
+    def timeout_handler(_signum, _frame):
+        raise TimeoutError("watch-page request exceeded total deadline")
+
+    previous_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.setitimer(signal.ITIMER_REAL, WATCH_PAGE_TOTAL_TIMEOUT)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
 def fetch_watch_heatmap(video_id):
     """Fetch a watch page with local cookies and extract its heat markers."""
     cookie_file = Path("cookies.txt")
@@ -122,8 +141,9 @@ def fetch_watch_heatmap(video_id):
         headers={"User-Agent": WATCH_USER_AGENT,
                  "Accept-Language": "en-US,en;q=0.9"},
     )
-    with opener.open(request, timeout=20) as response:
-        html = response.read().decode("utf-8", errors="replace")
+    with _watch_page_deadline():
+        with opener.open(request, timeout=WATCH_PAGE_SOCKET_TIMEOUT) as response:
+            html = response.read().decode("utf-8", errors="replace")
     return parse_watch_heatmap(html)
 
 
