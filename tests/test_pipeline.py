@@ -495,3 +495,101 @@ def test_workflow_sets_up_writable_python_tool_cache_on_mac_runner():
 
 def test_attempt_limit_checks_ten_trending_candidates():
     assert pipeline.MAX_ATTEMPTS == 10
+
+
+def test_parse_video_id_handles_all_url_forms():
+    assert pipeline.parse_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert pipeline.parse_video_id("https://youtu.be/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert pipeline.parse_video_id("https://www.youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert pipeline.parse_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") == "dQw4w9WgXcQ"
+
+
+def test_parse_video_id_rejects_junk():
+    with pytest.raises(ValueError):
+        pipeline.parse_video_id("not a url")
+
+
+def test_parse_timestamp_handles_all_formats():
+    assert pipeline.parse_timestamp("90") == 90
+    assert pipeline.parse_timestamp("1:30") == 90
+    assert pipeline.parse_timestamp("1:02:03") == 3723
+
+
+@pytest.mark.parametrize("bad", ["", "-5", "1:2:3:4", "abc", "1:xx"])
+def test_parse_timestamp_rejects_junk(bad):
+    with pytest.raises(ValueError):
+        pipeline.parse_timestamp(bad)
+
+
+def test_run_manual_clips_at_parsed_start_and_uploads_once(tmp_path, monkeypatch):
+    edits = []
+    uploads = []
+    logged = []
+
+    monkeypatch.setattr(pipeline, "WORK", tmp_path)
+    monkeypatch.setattr(pipeline, "download", lambda vid: (
+        tmp_path / f"{vid}.mp4", {"title": "T", "uploader": "Chan", "duration": 600}))
+    monkeypatch.setattr(pipeline, "gen_metadata", lambda *_a: {
+        "title": "T", "description": "D", "hashtags": [], "hook": "HOOK"})
+    monkeypatch.setattr(pipeline, "edit",
+                        lambda src, start, hook, credit, out: edits.append((start, hook, credit)))
+    monkeypatch.setattr(pipeline, "self_check", lambda _p: None)
+    monkeypatch.setattr(pipeline, "upload", lambda path, meta, privacy: uploads.append(privacy) or "id")
+    monkeypatch.setattr(pipeline, "log_run", lambda entry: logged.append(entry))
+
+    pipeline.run_manual("https://youtu.be/dQw4w9WgXcQ", 120, "public")
+
+    assert edits == [(120, "HOOK", "Credit: Chan")]
+    assert uploads == ["public"]
+    assert logged[-1]["method"] == "manual"
+
+
+def test_run_manual_clamps_start_past_end(tmp_path, monkeypatch):
+    edits = []
+
+    monkeypatch.setattr(pipeline, "WORK", tmp_path)
+    monkeypatch.setattr(pipeline, "download", lambda vid: (
+        tmp_path / f"{vid}.mp4", {"title": "T", "uploader": "Chan", "duration": 100}))
+    monkeypatch.setattr(pipeline, "gen_metadata", lambda *_a: {
+        "title": "T", "description": "D", "hashtags": [], "hook": "H"})
+    monkeypatch.setattr(pipeline, "edit",
+                        lambda src, start, hook, credit, out: edits.append(start))
+    monkeypatch.setattr(pipeline, "self_check", lambda _p: None)
+    monkeypatch.setattr(pipeline, "upload", lambda *_a: "id")
+    monkeypatch.setattr(pipeline, "log_run", lambda _e: None)
+
+    # start 90 in a 100s source: clamp to duration - CLIP_SECONDS = 65
+    pipeline.run_manual("https://youtu.be/dQw4w9WgXcQ", 90, "public")
+
+    assert edits == [65]
+
+
+def test_run_manual_does_not_touch_used_videos(tmp_path, monkeypatch):
+    used_file = tmp_path / "used_videos.json"
+    used_file.write_text("[]")
+
+    monkeypatch.setattr(pipeline, "WORK", tmp_path)
+    monkeypatch.setattr(pipeline, "USED_FILE", used_file)
+    monkeypatch.setattr(pipeline, "download", lambda vid: (
+        tmp_path / f"{vid}.mp4", {"title": "T", "uploader": "Chan", "duration": 600}))
+    monkeypatch.setattr(pipeline, "gen_metadata", lambda *_a: {
+        "title": "T", "description": "D", "hashtags": [], "hook": "H"})
+    monkeypatch.setattr(pipeline, "edit", lambda *_a: None)
+    monkeypatch.setattr(pipeline, "self_check", lambda _p: None)
+    monkeypatch.setattr(pipeline, "upload", lambda *_a: "id")
+    monkeypatch.setattr(pipeline, "log_run", lambda _e: None)
+
+    pipeline.run_manual("https://youtu.be/dQw4w9WgXcQ", 10, "public")
+
+    assert used_file.read_text() == "[]"
+
+
+def test_clip_workflow_is_manual_dispatch_on_mac_runner():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/clip.yml").read_text()
+
+    assert "workflow_dispatch:" in workflow
+    assert "schedule:" not in workflow
+    assert "url:" in workflow and "start:" in workflow
+    assert "runs-on: [self-hosted, macOS, yt-shorts]" in workflow
+    assert 'pipeline.py --url' in workflow

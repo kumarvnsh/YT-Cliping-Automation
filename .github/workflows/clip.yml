@@ -1,0 +1,64 @@
+name: clip
+concurrency:
+  group: daily-short
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: YouTube URL to clip from
+        type: string
+        required: true
+      start:
+        description: Start timestamp (SS, MM:SS, or HH:MM:SS)
+        type: string
+        required: true
+      dry_run:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: [self-hosted, macOS, yt-shorts]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create local Python environment
+        run: |
+          python3 --version
+          python3 -m venv .venv
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.3.0
+      - name: Verify Mac runner dependencies
+        run: |
+          export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"
+          echo "/opt/homebrew/opt/ffmpeg-full/bin" >> "$GITHUB_PATH"
+          command -v ffmpeg
+          ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext
+      - run: .venv/bin/python -m pip install -r requirements.txt
+      - name: Export local Brave cookies
+        run: .venv/bin/python export_cookies.py
+      - name: Run manual clip
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            .venv/bin/python pipeline.py --url "${{ inputs.url }}" --start "${{ inputs.start }}" --dry-run
+          else
+            .venv/bin/python pipeline.py --url "${{ inputs.url }}" --start "${{ inputs.start }}"
+          fi
+        env:
+          YT_API_KEY: ${{ secrets.YT_API_KEY }}
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FFMPEG_FONT: Arial
+          USE_RENDERED_HEATMAP: "1"
+          BRAVE_EXECUTABLE: /Applications/Brave Browser.app/Contents/MacOS/Brave Browser
+      - name: Remove exported cookies
+        if: always()
+        run: rm -f cookies.txt

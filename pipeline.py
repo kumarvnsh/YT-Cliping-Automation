@@ -35,6 +35,28 @@ def parse_duration(iso: str) -> int:
     return h * 3600 + mn * 60 + s
 
 
+_VIDEO_ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})")
+
+
+def parse_video_id(url):
+    """Extract the 11-char video id from watch?v=, youtu.be/, or /shorts/ URLs."""
+    m = _VIDEO_ID_RE.search(url)
+    if not m:
+        raise ValueError(f"cannot parse video id from url: {url!r}")
+    return m.group(1)
+
+
+def parse_timestamp(ts):
+    """Parse SS, MM:SS, or HH:MM:SS into seconds. Rejects negatives and junk."""
+    parts = ts.strip().split(":")
+    if len(parts) > 3 or not all(p.isdigit() for p in parts):
+        raise ValueError(f"bad timestamp: {ts!r}")
+    seconds = 0
+    for p in parts:
+        seconds = seconds * 60 + int(p)
+    return seconds
+
+
 def eligible(items, used):
     return [v for v in items
             if v["id"] not in used
@@ -279,13 +301,25 @@ def atomic_write_json(path, data):
     temp_path.replace(path)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--dry-run", action="store_true",
-                    help="upload as private instead of public")
-    args = ap.parse_args()
-    privacy = "private" if args.dry_run else "public"
+def run_manual(url, start, privacy):
+    """Build and upload one Short from a user-supplied URL and start second."""
+    video_id = parse_video_id(url)
+    src, info = download(video_id)
+    duration = info.get("duration") or 0
+    start = min(max(0, start), max(0, duration - CLIP_SECONDS))
+    channel = info.get("uploader", "")
+    canonical = f"https://www.youtube.com/watch?v={video_id}"
+    meta = gen_metadata(info["title"], channel, canonical)
+    out = WORK / f"short_{video_id}.mp4"
+    edit(src, start, meta["hook"], f"Credit: {channel}", out)
+    self_check(out)
+    uploaded_id = upload(out, meta, privacy)
+    log_run({"source": video_id, "uploaded": uploaded_id,
+             "title": meta["title"], "privacy": privacy, "method": "manual"})
+    print(f"Uploaded https://www.youtube.com/shorts/{uploaded_id}")
 
+
+def run_trending(privacy):
     used = set(json.loads(USED_FILE.read_text()))
     candidates = eligible(fetch_trending(os.environ["YT_API_KEY"]), used)
     errors = []
@@ -323,6 +357,24 @@ def main():
         return
     log_run({"failed": errors})
     sys.exit(f"all {MAX_ATTEMPTS} candidates failed: {errors}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true",
+                    help="upload as private instead of public")
+    ap.add_argument("--url", help="manual mode: YouTube URL to clip from")
+    ap.add_argument("--start",
+                    help="manual mode: start timestamp (SS, MM:SS, or HH:MM:SS)")
+    args = ap.parse_args()
+    privacy = "private" if args.dry_run else "public"
+
+    if args.url:
+        if not args.start:
+            sys.exit("--start is required with --url")
+        run_manual(args.url, parse_timestamp(args.start), privacy)
+        return
+    run_trending(privacy)
 
 
 if __name__ == "__main__":
