@@ -119,3 +119,7 @@ def test_workflow_provisions_youtube_challenge_dependencies():
 
     assert "yt-dlp[default]" in requirements
     assert "denoland/setup-deno@v2" in workflow
+
+
+def test_attempt_limit_checks_ten_trending_candidates():
+    assert pipeline.MAX_ATTEMPTS == 10

@@ -10,7 +10,7 @@ from pathlib import Path
 
 CLIP_SECONDS = 35
 MIN_SOURCE_SECONDS = 120
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 10
 USED_FILE = Path("used_videos.json")
 LOG_FILE = Path("log.jsonl")
 WORK = Path("work")
