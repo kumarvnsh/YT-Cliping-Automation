@@ -110,3 +110,12 @@ def test_bookkeeping_failure_after_upload_does_not_try_next_candidate(tmp_path, 
         pipeline.main()
 
     assert len(attempted_uploads) == 1
+
+
+def test_workflow_provisions_youtube_challenge_dependencies():
+    root = Path(__file__).resolve().parents[1]
+    requirements = (root / "requirements.txt").read_text()
+    workflow = (root / ".github/workflows/daily.yml").read_text()
+
+    assert "yt-dlp[default]" in requirements
+    assert "denoland/setup-deno@v2" in workflow
