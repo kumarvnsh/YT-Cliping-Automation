@@ -17,6 +17,7 @@ BRAVE_EXECUTABLE = os.getenv(
 )
 RENDERED_HEATMAP_TIMEOUT_SECONDS = 20
 RENDERED_HEATMAP_POLL_SECONDS = 1
+CLEANUP_INTERRUPT_SECONDS = 0.01
 
 PLAYER_MARKERS_SCRIPT = """
 () => {
@@ -50,6 +51,13 @@ def _rendered_heatmap_deadline(seconds):
     started = monotonic()
 
     def raise_timeout(_signum, _frame):
+        # Keep a short periodic alarm active while stack unwinding runs browser
+        # cleanup, so a blocking close or Playwright shutdown cannot hang.
+        signal.setitimer(
+            signal.ITIMER_REAL,
+            CLEANUP_INTERRUPT_SECONDS,
+            CLEANUP_INTERRUPT_SECONDS,
+        )
         raise RenderedHeatmapTimeout("rendered heatmap retrieval timed out")
 
     signal.signal(signal.SIGALRM, raise_timeout)
@@ -58,14 +66,20 @@ def _rendered_heatmap_deadline(seconds):
         yield
     finally:
         elapsed = monotonic() - started
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
-        remaining_delay = previous_delay - elapsed
-        if previous_delay and remaining_delay <= 0:
-            remaining_delay = 0.001
-        else:
-            remaining_delay = max(0, remaining_delay)
-        signal.setitimer(signal.ITIMER_REAL, remaining_delay, previous_interval)
+        blocked_signals = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            while signal.SIGALRM in signal.sigpending():
+                signal.sigwait({signal.SIGALRM})
+            signal.signal(signal.SIGALRM, previous_handler)
+            remaining_delay = previous_delay - elapsed
+            if previous_delay and remaining_delay <= 0:
+                remaining_delay = 0.001
+            else:
+                remaining_delay = max(0, remaining_delay)
+            signal.setitimer(signal.ITIMER_REAL, remaining_delay, previous_interval)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, blocked_signals)
 
 
 def _is_youtube_domain(domain):
