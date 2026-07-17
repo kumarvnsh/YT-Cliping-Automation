@@ -18,6 +18,11 @@ from heatmaps import parse_watch_heatmap
 
 CLIP_SECONDS = 35
 MIN_SOURCE_SECONDS = 120
+# ponytail: cap source length so no-heatmap candidates don't pull a multi-hour
+# VOD to grab 35s; tune if too many candidates get filtered.
+MAX_SOURCE_SECONDS = 3600
+# Backstop so 1 fps scene analysis can never hang the run; tune per runner.
+MOTION_ANALYSIS_TIMEOUT = 120
 MAX_ATTEMPTS = 10
 USED_FILE = Path("used_videos.json")
 LOG_FILE = Path("log.jsonl")
@@ -33,7 +38,8 @@ def parse_duration(iso: str) -> int:
 def eligible(items, used):
     return [v for v in items
             if v["id"] not in used
-            and parse_duration(v["contentDetails"]["duration"]) >= MIN_SOURCE_SECONDS]
+            and MIN_SOURCE_SECONDS <= parse_duration(
+                v["contentDetails"]["duration"]) <= MAX_SOURCE_SECONDS]
 
 
 def fetch_trending(api_key):
@@ -186,8 +192,13 @@ def motion_scores(src):
         meta_path = Path(tmp.name)
     try:
         vf = f"fps=1,select='gt(scene,-1)',metadata=print:file={meta_path}"
-        r = subprocess.run(["ffmpeg", "-y", "-i", str(src), "-vf", vf,
-                            "-an", "-f", "null", "-"], capture_output=True)
+        try:
+            r = subprocess.run(["ffmpeg", "-y", "-i", str(src), "-vf", vf,
+                                "-an", "-f", "null", "-"], capture_output=True,
+                               timeout=MOTION_ANALYSIS_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"ffmpeg motion analysis exceeded {MOTION_ANALYSIS_TIMEOUT}s")
         if r.returncode != 0:
             raise RuntimeError(f"ffmpeg motion analysis failed: {r.stderr.decode()[-2000:]}")
         return motion.parse_scene_scores(meta_path.read_text())

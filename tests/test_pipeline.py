@@ -1,5 +1,6 @@
 import json
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,6 +25,21 @@ def test_eligible_filters_used_and_short():
     items = [_vid("a", "PT10M"), _vid("b", "PT1M30S"), _vid("c", "PT5M")]
     out = pipeline.eligible(items, used={"c"})
     assert [v["id"] for v in out] == ["a"]
+
+
+def test_eligible_filters_over_max_source_length():
+    items = [_vid("ok", "PT30M"), _vid("toolong", "PT3H")]
+    out = pipeline.eligible(items, used=set())
+    assert [v["id"] for v in out] == ["ok"]
+
+
+def test_motion_scores_raises_instead_of_hanging_on_timeout(monkeypatch):
+    def _timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=pipeline.MOTION_ANALYSIS_TIMEOUT)
+
+    monkeypatch.setattr(pipeline.subprocess, "run", _timeout)
+    with pytest.raises(RuntimeError, match="exceeded"):
+        pipeline.motion_scores("any.mp4")
 
 
 def test_pick_window_finds_hot_region():
