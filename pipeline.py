@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 CLIP_SECONDS = 35
@@ -177,6 +178,18 @@ def log_run(entry):
         f.write(json.dumps(entry) + "\n")
 
 
+def atomic_write_json(path, data):
+    """Write JSON using a same-directory replacement to avoid partial state files."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent,
+        prefix=f".{path.name}.", suffix=".tmp", delete=False,
+    ) as tmp:
+        json.dump(data, tmp, indent=0)
+        tmp.write("\n")
+        temp_path = Path(tmp.name)
+    temp_path.replace(path)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true",
@@ -203,15 +216,19 @@ def main():
             edit(src, start, meta["hook"], f"Credit: {channel}", out)
             self_check(out)
             uploaded_id = upload(out, meta, privacy)
-            used.add(vid)
-            USED_FILE.write_text(json.dumps(sorted(used), indent=0))
-            log_run({"source": vid, "uploaded": uploaded_id,
-                     "title": meta["title"], "privacy": privacy})
-            print(f"Uploaded https://www.youtube.com/shorts/{uploaded_id}")
-            return
         except Exception as e:
+            # broad catch is deliberate: any per-candidate failure -> try next one
             print(f"candidate {vid} failed: {e}", file=sys.stderr)
             errors.append(f"{vid}: {e}")
+            continue
+        # Do not retry another candidate after upload: this only prevents duplicates
+        # within this invocation, not exactly-once delivery across future runs.
+        used.add(vid)
+        atomic_write_json(USED_FILE, sorted(used))
+        log_run({"source": vid, "uploaded": uploaded_id,
+                 "title": meta["title"], "privacy": privacy})
+        print(f"Uploaded https://www.youtube.com/shorts/{uploaded_id}")
+        return
     log_run({"failed": errors})
     sys.exit(f"all {MAX_ATTEMPTS} candidates failed: {errors}")
 
