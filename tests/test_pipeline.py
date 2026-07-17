@@ -582,3 +582,14 @@ def test_run_manual_does_not_touch_used_videos(tmp_path, monkeypatch):
     pipeline.run_manual("https://youtu.be/dQw4w9WgXcQ", 10, "public")
 
     assert used_file.read_text() == "[]"
+
+
+def test_clip_workflow_is_manual_dispatch_on_mac_runner():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/clip.yml").read_text()
+
+    assert "workflow_dispatch:" in workflow
+    assert "schedule:" not in workflow
+    assert "url:" in workflow and "start:" in workflow
+    assert "runs-on: [self-hosted, macOS, yt-shorts]" in workflow
+    assert 'pipeline.py --url' in workflow
