@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, yt-shorts]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,12 +26,13 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.3.0
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+      - name: Verify Mac runner dependencies
+        run: |
+          command -v ffmpeg
+          ffmpeg -hide_banner -filters | grep -q drawtext
       - run: pip install -r requirements.txt
-      - name: Write cookies
-        run: printf '%s' "$YT_COOKIES" > cookies.txt
-        env:
-          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+      - name: Export local Brave cookies
+        run: python export_cookies.py
       - name: Run pipeline
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
@@ -46,6 +47,10 @@ jobs:
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FFMPEG_FONT: Arial
+      - name: Remove exported cookies
+        if: always()
+        run: rm -f cookies.txt
       - name: Commit state
         if: always()
         run: |

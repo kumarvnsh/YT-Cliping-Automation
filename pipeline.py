@@ -217,10 +217,11 @@ def _drawtext_escape(text):
 
 def edit(src, start, hook, credit, out):
     hook_e, credit_e = _drawtext_escape(hook), _drawtext_escape(credit)
+    font = os.getenv("FFMPEG_FONT", "DejaVuSans")
     vf = ("crop=ih*9/16:ih,scale=1080:1920,"
-          f"drawtext=text='{hook_e}':font=DejaVuSans:fontsize=64:fontcolor=white:"
+          f"drawtext=text='{hook_e}':font={font}:fontsize=64:fontcolor=white:"
           "borderw=4:bordercolor=black:x=(w-text_w)/2:y=200,"
-          f"drawtext=text='{credit_e}':font=DejaVuSans:fontsize=36:fontcolor=white:"
+          f"drawtext=text='{credit_e}':font={font}:fontsize=36:fontcolor=white:"
           "borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-250")
     r = subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-i", str(src),
                         "-t", str(CLIP_SECONDS), "-vf", vf,

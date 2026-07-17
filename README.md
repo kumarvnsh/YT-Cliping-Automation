@@ -9,12 +9,15 @@ hook/credit text → upload. Spec + plan in `docs/superpowers/`.
    create an **API key** and an OAuth client (**Desktop app**).
 2. `YT_CLIENT_ID=... YT_CLIENT_SECRET=... python get_token.py` → copy
    refresh token.
-3. Export YouTube cookies from a private/incognito YouTube session using a
-   browser extension that writes Netscape `cookies.txt` format. The pipeline
-   uses them for both the watch-page most-replayed lookup and yt-dlp downloads.
-   Re-export when either stage starts failing.
+3. Add a [self-hosted macOS runner](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/adding-self-hosted-runners)
+   to this repository with the custom label `yt-shorts`. Keep the Mac awake,
+   online, and logged in to the Brave profile that is signed in to YouTube.
+   Install ffmpeg once (`brew install ffmpeg`). Each run exports that local
+   Brave session for the watch-page lookup and yt-dlp, then deletes the export.
 4. Add GitHub secrets: `YT_API_KEY`, `YT_CLIENT_ID`, `YT_CLIENT_SECRET`,
-   `YT_REFRESH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `YT_COOKIES`.
+   `YT_REFRESH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`.
+   Delete the obsolete `YT_COOKIES` secret after the first successful
+   self-hosted run.
 
 ## Rollout
 

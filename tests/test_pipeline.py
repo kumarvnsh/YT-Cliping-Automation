@@ -202,6 +202,25 @@ def test_drawtext_escape_kills_quotes():
     assert "\\:" in out and "\\%" in out
 
 
+def test_edit_uses_configured_ffmpeg_font(monkeypatch, tmp_path):
+    command = []
+
+    class Result:
+        returncode = 0
+        stderr = b""
+
+    monkeypatch.setenv("FFMPEG_FONT", "Arial")
+    monkeypatch.setattr(
+        pipeline.subprocess,
+        "run",
+        lambda args, **_kwargs: command.extend(args) or Result(),
+    )
+
+    pipeline.edit(tmp_path / "source.mp4", 0, "Hook", "Credit", tmp_path / "out.mp4")
+
+    assert "font=Arial" in command[command.index("-vf") + 1]
+
+
 def test_gen_metadata_falls_back_to_claude(monkeypatch):
     meta = {"title": "T2", "description": "D", "hashtags": [], "hook": "H"}
     def boom(p):
@@ -339,6 +358,17 @@ def test_workflow_provisions_youtube_challenge_dependencies():
 
     assert "yt-dlp[default]" in requirements
     assert "denoland/setup-deno@v2" in workflow
+
+
+def test_workflow_uses_mac_runner_and_local_brave_cookie_export():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/daily.yml").read_text()
+
+    assert "runs-on: [self-hosted, macOS, yt-shorts]" in workflow
+    assert "python export_cookies.py" in workflow
+    assert "YT_COOKIES:" not in workflow
+    assert "sudo apt-get" not in workflow
+    assert "rm -f cookies.txt" in workflow
 
 
 def test_attempt_limit_checks_ten_trending_candidates():
