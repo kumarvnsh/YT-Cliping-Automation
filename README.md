@@ -11,9 +11,13 @@ hook/credit text → upload. Spec + plan in `docs/superpowers/`.
    refresh token.
 3. Add a [self-hosted macOS runner](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/adding-self-hosted-runners)
    to this repository with the custom label `yt-shorts`. Keep the Mac awake,
-   online, and logged in to the Brave profile that is signed in to YouTube.
-   Install ffmpeg once (`brew install ffmpeg`). Each run exports that local
-   Brave session for the watch-page lookup and yt-dlp, then deletes the export.
+   unlocked, online, and logged in to the local Brave session that is signed in
+   to YouTube; a visible browser window is required for the rendered fallback.
+   Install ffmpeg once (`brew install ffmpeg`). Each job exports cookies from
+   that signed-in local session, then—only if the normal watch-page parser finds
+   no markers—uses an isolated, temporary, headed Brave profile seeded with
+   those cookies. It never uses the regular Brave profile, and deletes both the
+   temporary profile and cookie export after every job.
 4. Add GitHub secrets: `YT_API_KEY`, `YT_CLIENT_ID`, `YT_CLIENT_SECRET`,
    `YT_REFRESH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`.
    Delete the obsolete `YT_COOKIES` secret after the first successful
@@ -21,8 +25,12 @@ hook/credit text → upload. Spec + plan in `docs/superpowers/`.
 
 ## Rollout
 
-Week 1: trigger workflow manually (defaults to dry-run → uploads **private**),
-check results in YouTube Studio. Then rely on the daily cron (uploads public).
+By default, local pipeline runs use only the normal static watch-page parser;
+set `USE_RENDERED_HEATMAP=1` to enable the rendered Brave fallback when static
+markers are absent. The self-hosted daily workflow exports `cookies.txt` before
+running the pipeline and enables that fallback automatically. Week 1: trigger
+the workflow manually (defaults to dry-run → uploads **private**), check
+results in YouTube Studio. Then rely on the daily cron (uploads public).
 
 ## Local test
 

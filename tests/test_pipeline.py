@@ -218,6 +218,64 @@ def test_fetch_watch_heatmap_enforces_total_response_deadline(monkeypatch):
     ]
 
 
+def test_fetch_heatmap_uses_rendered_browser_after_empty_static_result(monkeypatch):
+    rendered = [{"start_time": 0.0, "end_time": 5.0, "value": 1.0}]
+    calls = []
+
+    monkeypatch.setattr(pipeline, "fetch_watch_heatmap", lambda _vid: [])
+    monkeypatch.setattr(
+        pipeline.browser_heatmap,
+        "fetch_rendered_heatmap",
+        lambda vid, cookie_file: calls.append((vid, cookie_file)) or rendered,
+    )
+    monkeypatch.setenv("USE_RENDERED_HEATMAP", "1")
+
+    assert pipeline.fetch_heatmap("abc123") == rendered
+    assert calls == [("abc123", Path("cookies.txt"))]
+
+
+def test_fetch_heatmap_does_not_launch_browser_when_static_markers_exist(monkeypatch):
+    static = [{"start_time": 0.0, "end_time": 5.0, "value": 1.0}]
+
+    monkeypatch.setattr(pipeline, "fetch_watch_heatmap", lambda _vid: static)
+    monkeypatch.setattr(
+        pipeline.browser_heatmap,
+        "fetch_rendered_heatmap",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("browser launched")),
+    )
+    monkeypatch.setenv("USE_RENDERED_HEATMAP", "1")
+
+    assert pipeline.fetch_heatmap("abc123") == static
+
+
+@pytest.mark.parametrize("flag", [None, "0"])
+def test_fetch_heatmap_does_not_launch_browser_without_enabled_flag(monkeypatch, flag):
+    monkeypatch.setattr(pipeline, "fetch_watch_heatmap", lambda _vid: [])
+    monkeypatch.setattr(
+        pipeline.browser_heatmap,
+        "fetch_rendered_heatmap",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("browser launched")),
+    )
+    if flag is None:
+        monkeypatch.delenv("USE_RENDERED_HEATMAP", raising=False)
+    else:
+        monkeypatch.setenv("USE_RENDERED_HEATMAP", flag)
+
+    assert pipeline.fetch_heatmap("abc123") == []
+
+
+def test_workflow_enables_rendered_brave_heatmap_fallback_on_mac_runner():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/daily.yml").read_text()
+
+    assert "runs-on: [self-hosted, macOS, yt-shorts]" in workflow
+    assert 'USE_RENDERED_HEATMAP: "1"' in workflow
+    assert (
+        "BRAVE_EXECUTABLE: /Applications/Brave Browser.app/Contents/MacOS/"
+        "Brave Browser" in workflow
+    )
+
+
 def test_gen_metadata_uses_openai(monkeypatch):
     meta = {"title": "T", "description": "D", "hashtags": ["#shorts"], "hook": "H"}
     monkeypatch.setattr(pipeline, "_openai_meta", lambda p: meta)

@@ -51,6 +51,8 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FFMPEG_FONT: Arial
+          USE_RENDERED_HEATMAP: "1"
+          BRAVE_EXECUTABLE: /Applications/Brave Browser.app/Contents/MacOS/Brave Browser
       - name: Remove exported cookies
         if: always()
         run: rm -f cookies.txt

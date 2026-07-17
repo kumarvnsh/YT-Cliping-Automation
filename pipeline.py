@@ -12,6 +12,7 @@ from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
+import browser_heatmap
 from heatmaps import parse_watch_heatmap
 
 CLIP_SECONDS = 35
@@ -100,6 +101,14 @@ def fetch_watch_heatmap(video_id):
         with opener.open(request, timeout=WATCH_PAGE_SOCKET_TIMEOUT) as response:
             html = response.read().decode("utf-8", errors="replace")
     return parse_watch_heatmap(html)
+
+
+def fetch_heatmap(video_id):
+    """Fetch static heat markers, optionally falling back to rendered markers."""
+    heatmap = fetch_watch_heatmap(video_id)
+    if heatmap or os.getenv("USE_RENDERED_HEATMAP") != "1":
+        return heatmap
+    return browser_heatmap.fetch_rendered_heatmap(video_id, Path("cookies.txt"))
 
 
 META_SYSTEM = (
@@ -252,7 +261,7 @@ def main():
     for video in candidates[:MAX_ATTEMPTS]:
         vid = video["id"]
         try:
-            heatmap = fetch_watch_heatmap(vid)
+            heatmap = fetch_heatmap(vid)
             if not heatmap:
                 raise ValueError("no heatmap")
             duration = parse_duration(video["contentDetails"]["duration"])
