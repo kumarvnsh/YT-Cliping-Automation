@@ -46,10 +46,13 @@ Steps:
 3. **Clip pick** — parse `heatmap` from info JSON (YouTube most-replayed data).
    Choose the 35-second window with the highest summed heatmap value.
    No heatmap → skip video, try the next trending candidate.
-4. **Metadata** — one Claude API call (claude-haiku-4-5), input: source title,
+4. **Metadata** — one LLM call: OpenAI API primary (gpt-4o-mini), Claude API
+   fallback (claude-haiku-4-5) if the OpenAI call errors. Input: source title,
    channel name, game. Output JSON: short title (<100 chars), description
    (includes source credit + link), hashtags (#shorts #gaming + game tag),
    hook text. Called before ffmpeg because the hook text is burned in.
+   Same prompt + JSON schema for both providers; one try/except, no
+   abstraction layer.
 5. **Edit** — single ffmpeg command: cut 35s → crop/scale to 1080×1920 center
    → drawtext hook at top → drawtext "Credit: @channel" at bottom.
 6. **Upload** — YouTube Data API `videos.insert`, `privacyStatus=public`
@@ -66,14 +69,16 @@ Steps:
 - `pipeline.py` — the whole pipeline (~200 lines), `--dry-run` flag.
 - `get_token.py` — one-time local OAuth flow to mint the refresh token.
 - `.github/workflows/daily.yml` — cron schedule + secrets wiring + state commit.
-- `requirements.txt` — yt-dlp, google-api-python-client, google-auth, anthropic.
+- `requirements.txt` — yt-dlp, google-api-python-client, google-auth, openai,
+  anthropic.
 - `used_videos.json` — dedupe state, committed.
 - `log.jsonl` — run log, committed.
 
 ## Secrets (GitHub Actions)
 
 `YT_API_KEY`, `YT_CLIENT_ID`, `YT_CLIENT_SECRET`, `YT_REFRESH_TOKEN`,
-`ANTHROPIC_API_KEY`, `YT_COOKIES` (Netscape cookie file contents).
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (fallback), `YT_COOKIES`
+(Netscape cookie file contents).
 
 ## Testing
 
