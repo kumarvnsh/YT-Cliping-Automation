@@ -118,7 +118,7 @@ def download(video_id):
 
 
 def _drawtext_escape(text):
-    return text.replace("\\", "\\\\").replace("'", "'").replace(":", "\\:").replace("%", "\\%")
+    return text.replace("\\", "\\\\").replace("'", "’").replace(":", "\\:").replace("%", "\\%")
 
 
 def edit(src, start, hook, credit, out):
@@ -128,11 +128,13 @@ def edit(src, start, hook, credit, out):
           "borderw=4:bordercolor=black:x=(w-text_w)/2:y=200,"
           f"drawtext=text='{credit_e}':font=DejaVuSans:fontsize=36:fontcolor=white:"
           "borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-250")
-    subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-i", str(src),
-                    "-t", str(CLIP_SECONDS), "-vf", vf,
-                    "-c:v", "libx264", "-preset", "veryfast",
-                    "-c:a", "aac", str(out)],
-                   check=True, capture_output=True)
+    r = subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-i", str(src),
+                        "-t", str(CLIP_SECONDS), "-vf", vf,
+                        "-c:v", "libx264", "-preset", "veryfast",
+                        "-c:a", "aac", str(out)],
+                       capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {r.stderr.decode()[-2000:]}")
 
 
 def self_check(path):

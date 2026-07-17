@@ -43,6 +43,12 @@ def test_gen_metadata_uses_openai(monkeypatch):
     assert pipeline.gen_metadata("src", "chan", "http://u")["title"] == "T"
 
 
+def test_drawtext_escape_kills_quotes():
+    out = pipeline._drawtext_escape("it's 100%: fine")
+    assert "'" not in out
+    assert "\\:" in out and "\\%" in out
+
+
 def test_gen_metadata_falls_back_to_claude(monkeypatch):
     meta = {"title": "T2", "description": "D", "hashtags": [], "hook": "H"}
     def boom(p):
