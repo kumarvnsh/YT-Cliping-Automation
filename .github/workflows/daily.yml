@@ -29,8 +29,10 @@ jobs:
           deno-version: v2.3.0
       - name: Verify Mac runner dependencies
         run: |
+          export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"
+          echo "/opt/homebrew/opt/ffmpeg-full/bin" >> "$GITHUB_PATH"
           command -v ffmpeg
-          ffmpeg -hide_banner -filters | grep -q drawtext
+          ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext
       - run: .venv/bin/python -m pip install -r requirements.txt
       - name: Export local Brave cookies
         run: .venv/bin/python export_cookies.py

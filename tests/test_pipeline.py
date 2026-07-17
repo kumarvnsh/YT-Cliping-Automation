@@ -371,6 +371,15 @@ def test_workflow_uses_mac_runner_and_local_brave_cookie_export():
     assert "rm -f cookies.txt" in workflow
 
 
+def test_workflow_uses_keg_only_ffmpeg_full_for_drawtext():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/daily.yml").read_text()
+
+    assert 'export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"' in workflow
+    assert 'echo "/opt/homebrew/opt/ffmpeg-full/bin" >> "$GITHUB_PATH"' in workflow
+    assert "grep -q drawtext" in workflow
+
+
 def test_workflow_sets_up_writable_python_tool_cache_on_mac_runner():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/daily.yml").read_text()
