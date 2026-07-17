@@ -32,8 +32,8 @@ manual touch.
 ## Pipeline flow (daily)
 
 ```
-trending fetch → dedupe vs history → pick clip window → Claude metadata
-→ download → ffmpeg edit → upload → commit state
+trending fetch → dedupe vs history → download → pick clip window
+→ Claude metadata → ffmpeg edit → upload → commit state
 ```
 
 Steps:
