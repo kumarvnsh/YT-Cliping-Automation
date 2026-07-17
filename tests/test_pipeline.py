@@ -370,39 +370,37 @@ def test_bookkeeping_failure_after_upload_does_not_try_next_candidate(tmp_path, 
     assert len(attempted_uploads) == 1
 
 
-def test_main_skips_no_heatmap_before_downloading(tmp_path, monkeypatch):
+def test_main_downloads_no_heatmap_candidate_and_uses_motion_fallback(tmp_path, monkeypatch):
     used_file = tmp_path / "used_videos.json"
     used_file.write_text("[]")
     first, second = _vid("first", "PT10M"), _vid("second", "PT10M")
     downloaded = []
+    logged = []
 
     monkeypatch.setattr(pipeline, "USED_FILE", used_file)
     monkeypatch.setattr(pipeline, "LOG_FILE", tmp_path / "log.jsonl")
     monkeypatch.setattr(pipeline, "fetch_trending", lambda _key: [first, second])
-    monkeypatch.setattr(
-        pipeline,
-        "fetch_watch_heatmap",
-        lambda vid: [] if vid == "first" else [
-            {"start_time": 0, "end_time": 10, "value": 1},
-        ],
-    )
+    monkeypatch.setattr(pipeline, "fetch_watch_heatmap", lambda _vid: [])
     monkeypatch.setattr(
         pipeline,
         "download",
         lambda vid: (downloaded.append(vid) or tmp_path / f"{vid}.mp4", {}),
     )
+    monkeypatch.setattr(pipeline, "motion_scores", lambda _src: [])
     monkeypatch.setattr(pipeline, "gen_metadata", lambda *_args: {
         "title": "title", "description": "description", "hashtags": [], "hook": "hook",
     })
     monkeypatch.setattr(pipeline, "edit", lambda *_args: None)
     monkeypatch.setattr(pipeline, "self_check", lambda _path: None)
     monkeypatch.setattr(pipeline, "upload", lambda *_args: "id")
+    monkeypatch.setattr(pipeline, "log_run", lambda entry: logged.append(entry))
     monkeypatch.setattr(sys, "argv", ["pipeline.py", "--dry-run"])
     monkeypatch.setenv("YT_API_KEY", "test-key")
 
     pipeline.main()
 
-    assert downloaded == ["second"]
+    assert downloaded == ["first"]
+    assert logged[-1]["method"] == "center"
 
 
 def test_main_skips_watch_fetch_error_and_downloads_next_candidate(tmp_path, monkeypatch):

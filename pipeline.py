@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 import browser_heatmap
+import motion
 from heatmaps import parse_watch_heatmap
 
 CLIP_SECONDS = 35
@@ -175,6 +176,25 @@ def download(video_id):
     return out, info
 
 
+def motion_scores(src):
+    """Run 1 fps scene analysis on a downloaded clip; return (pts, score) pairs.
+
+    Raises RuntimeError if ffmpeg fails so the candidate is skipped. Empty or
+    all-zero output is valid and yields the centered window via pick_motion_window.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
+        meta_path = Path(tmp.name)
+    try:
+        vf = f"fps=1,select='gt(scene,-1)',metadata=print:file={meta_path}"
+        r = subprocess.run(["ffmpeg", "-y", "-i", str(src), "-vf", vf,
+                            "-an", "-f", "null", "-"], capture_output=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"ffmpeg motion analysis failed: {r.stderr.decode()[-2000:]}")
+        return motion.parse_scene_scores(meta_path.read_text())
+    finally:
+        meta_path.unlink(missing_ok=True)
+
+
 def _drawtext_escape(text):
     return text.replace("\\", "\\\\").replace("'", "’").replace(":", "\\:").replace("%", "\\%")
 
@@ -262,11 +282,13 @@ def main():
         vid = video["id"]
         try:
             heatmap = fetch_heatmap(vid)
-            if not heatmap:
-                raise ValueError("no heatmap")
             duration = parse_duration(video["contentDetails"]["duration"])
-            start = pick_window(heatmap, duration)
             src, _info = download(vid)
+            if heatmap:
+                start, method = pick_window(heatmap, duration), "heatmap"
+            else:
+                start, method = motion.pick_motion_window(
+                    motion_scores(src), duration, CLIP_SECONDS)
             title = video["snippet"]["title"]
             channel = video["snippet"]["channelTitle"]
             url = f"https://www.youtube.com/watch?v={vid}"
@@ -285,7 +307,7 @@ def main():
         used.add(vid)
         atomic_write_json(USED_FILE, sorted(used))
         log_run({"source": vid, "uploaded": uploaded_id,
-                 "title": meta["title"], "privacy": privacy})
+                 "title": meta["title"], "privacy": privacy, "method": method})
         print(f"Uploaded https://www.youtube.com/shorts/{uploaded_id}")
         return
     log_run({"failed": errors})
