@@ -18,8 +18,12 @@ permissions:
 jobs:
   run:
     runs-on: [self-hosted, macOS, yt-shorts]
+    env:
+      RUNNER_TOOL_CACHE: ${{ runner.temp }}/tool-cache
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare Python tool cache
+        run: mkdir -p "$RUNNER_TOOL_CACHE"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

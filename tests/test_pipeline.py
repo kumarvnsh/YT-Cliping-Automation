@@ -371,5 +371,13 @@ def test_workflow_uses_mac_runner_and_local_brave_cookie_export():
     assert "rm -f cookies.txt" in workflow
 
 
+def test_workflow_sets_up_writable_python_tool_cache_on_mac_runner():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/daily.yml").read_text()
+
+    assert "RUNNER_TOOL_CACHE: ${{ runner.temp }}/tool-cache" in workflow
+    assert 'mkdir -p "$RUNNER_TOOL_CACHE"' in workflow
+
+
 def test_attempt_limit_checks_ten_trending_candidates():
     assert pipeline.MAX_ATTEMPTS == 10
