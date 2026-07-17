@@ -1,6 +1,7 @@
 """Daily YT gaming shorts pipeline. See docs/superpowers/specs/ for design."""
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -52,6 +53,47 @@ def pick_window(heatmap, duration, clip=CLIP_SECONDS):
         if score > best_score:
             best_score, best_start = score, start
     return best_start
+
+
+HEAT_MARKER_RE = re.compile(r'"heatMarkerRenderer"\s*:\s*')
+
+
+def _number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def parse_watch_heatmap(html):
+    """Extract and normalize embedded YouTube heat-marker renderers."""
+    decoder = json.JSONDecoder()
+    markers = []
+    seen_ranges = set()
+    for match in HEAT_MARKER_RE.finditer(html):
+        try:
+            marker, _ = decoder.raw_decode(html, match.end())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(marker, dict):
+            continue
+
+        start_ms = marker.get("timeRangeStartMillis")
+        duration_ms = marker.get("markerDurationMillis")
+        value = marker.get("heatMarkerIntensityScoreNormalized")
+        if not all(_number(item) for item in (start_ms, duration_ms, value)):
+            continue
+        if not all(math.isfinite(item) for item in (start_ms, duration_ms, value)):
+            continue
+
+        start = start_ms / 1000
+        end = (start_ms + duration_ms) / 1000
+        if duration_ms <= 0 or start < 0 or end <= start:
+            continue
+        marker_range = (start, end)
+        if marker_range in seen_ranges:
+            continue
+        seen_ranges.add(marker_range)
+        markers.append({"start_time": float(start), "end_time": float(end),
+                        "value": float(value)})
+    return sorted(markers, key=lambda marker: (marker["start_time"], marker["end_time"]))
 
 
 META_SYSTEM = (

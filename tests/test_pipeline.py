@@ -40,6 +40,47 @@ def test_pick_window_clamps_to_video_end():
     assert start <= 200 - pipeline.CLIP_SECONDS
 
 
+def test_parse_watch_heatmap_normalizes_and_sorts_markers():
+    html = '''
+    {"heatMarkerRenderer": {"timeRangeStartMillis": 20000,
+                            "markerDurationMillis": 5000,
+                            "heatMarkerIntensityScoreNormalized": 0.4}}
+    {"heatMarkerRenderer": {"timeRangeStartMillis": 0,
+                            "markerDurationMillis": 5000,
+                            "heatMarkerIntensityScoreNormalized": 1}}
+    '''
+
+    assert pipeline.parse_watch_heatmap(html) == [
+        {"start_time": 0.0, "end_time": 5.0, "value": 1.0},
+        {"start_time": 20.0, "end_time": 25.0, "value": 0.4},
+    ]
+
+
+def test_parse_watch_heatmap_ignores_invalid_and_duplicate_markers():
+    html = '''
+    {"heatMarkerRenderer": {"timeRangeStartMillis": 0,
+                            "markerDurationMillis": 5000,
+                            "heatMarkerIntensityScoreNormalized": 0.7}}
+    {"heatMarkerRenderer": {"timeRangeStartMillis": 0,
+                            "markerDurationMillis": 5000,
+                            "heatMarkerIntensityScoreNormalized": 0.2}}
+    {"heatMarkerRenderer": {"timeRangeStartMillis": 1000,
+                            "markerDurationMillis": 0,
+                            "heatMarkerIntensityScoreNormalized": 0.5}}
+    {"heatMarkerRenderer": {"timeRangeStartMillis": "bad",
+                            "markerDurationMillis": 5000,
+                            "heatMarkerIntensityScoreNormalized": 0.5}}
+    '''
+
+    assert pipeline.parse_watch_heatmap(html) == [
+        {"start_time": 0.0, "end_time": 5.0, "value": 0.7},
+    ]
+
+
+def test_parse_watch_heatmap_returns_empty_for_pages_without_markers():
+    assert pipeline.parse_watch_heatmap("<html><body>no markers</body></html>") == []
+
+
 def test_gen_metadata_uses_openai(monkeypatch):
     meta = {"title": "T", "description": "D", "hashtags": ["#shorts"], "hook": "H"}
     monkeypatch.setattr(pipeline, "_openai_meta", lambda p: meta)
