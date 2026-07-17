@@ -148,3 +148,73 @@ def self_check(path):
     dur = float(data["format"]["duration"])
     assert (w, h) == (1080, 1920), f"bad resolution {w}x{h}"
     assert abs(dur - CLIP_SECONDS) < 2, f"bad duration {dur}"
+
+
+def upload(path, meta, privacy):
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload
+    creds = Credentials(
+        None,
+        refresh_token=os.environ["YT_REFRESH_TOKEN"],
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.environ["YT_CLIENT_ID"],
+        client_secret=os.environ["YT_CLIENT_SECRET"])
+    yt = build("youtube", "v3", credentials=creds)
+    body = {"snippet": {"title": meta["title"][:100],
+                        "description": meta["description"],
+                        "tags": [t.lstrip("#") for t in meta["hashtags"]],
+                        "categoryId": "20"},
+            "status": {"privacyStatus": privacy,
+                       "selfDeclaredMadeForKids": False}}
+    req = yt.videos().insert(part="snippet,status", body=body,
+                             media_body=MediaFileUpload(str(path), resumable=True))
+    return req.execute()["id"]
+
+
+def log_run(entry):
+    with LOG_FILE.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true",
+                    help="upload as private instead of public")
+    args = ap.parse_args()
+    privacy = "private" if args.dry_run else "public"
+
+    used = set(json.loads(USED_FILE.read_text()))
+    candidates = eligible(fetch_trending(os.environ["YT_API_KEY"]), used)
+    errors = []
+    for video in candidates[:MAX_ATTEMPTS]:
+        vid = video["id"]
+        try:
+            src, info = download(vid)
+            heatmap = info.get("heatmap")
+            if not heatmap:
+                raise ValueError("no heatmap")
+            start = pick_window(heatmap, info["duration"])
+            title = video["snippet"]["title"]
+            channel = video["snippet"]["channelTitle"]
+            url = f"https://www.youtube.com/watch?v={vid}"
+            meta = gen_metadata(title, channel, url)
+            out = WORK / f"short_{vid}.mp4"
+            edit(src, start, meta["hook"], f"Credit: {channel}", out)
+            self_check(out)
+            uploaded_id = upload(out, meta, privacy)
+            used.add(vid)
+            USED_FILE.write_text(json.dumps(sorted(used), indent=0))
+            log_run({"source": vid, "uploaded": uploaded_id,
+                     "title": meta["title"], "privacy": privacy})
+            print(f"Uploaded https://www.youtube.com/shorts/{uploaded_id}")
+            return
+        except Exception as e:
+            print(f"candidate {vid} failed: {e}", file=sys.stderr)
+            errors.append(f"{vid}: {e}")
+    log_run({"failed": errors})
+    sys.exit(f"all {MAX_ATTEMPTS} candidates failed: {errors}")
+
+
+if __name__ == "__main__":
+    main()
