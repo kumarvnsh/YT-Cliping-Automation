@@ -99,3 +99,50 @@ def gen_metadata(src_title, src_channel, src_url):
         if key not in meta:
             raise ValueError(f"metadata missing {key}: {meta}")
     return meta
+
+
+def download(video_id):
+    """Download source at <=720p; return (video path, info dict)."""
+    import yt_dlp
+    WORK.mkdir(exist_ok=True)
+    out = WORK / f"{video_id}.mp4"
+    opts = {"format": "bv*[height<=720]+ba/b[height<=720]",
+            "outtmpl": str(out),
+            "merge_output_format": "mp4",
+            "quiet": True}
+    if Path("cookies.txt").exists():
+        opts["cookiefile"] = "cookies.txt"
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}")
+    return out, info
+
+
+def _drawtext_escape(text):
+    return text.replace("\\", "\\\\").replace("'", "'").replace(":", "\\:").replace("%", "\\%")
+
+
+def edit(src, start, hook, credit, out):
+    hook_e, credit_e = _drawtext_escape(hook), _drawtext_escape(credit)
+    vf = ("crop=ih*9/16:ih,scale=1080:1920,"
+          f"drawtext=text='{hook_e}':font=DejaVuSans:fontsize=64:fontcolor=white:"
+          "borderw=4:bordercolor=black:x=(w-text_w)/2:y=200,"
+          f"drawtext=text='{credit_e}':font=DejaVuSans:fontsize=36:fontcolor=white:"
+          "borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-250")
+    subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-i", str(src),
+                    "-t", str(CLIP_SECONDS), "-vf", vf,
+                    "-c:v", "libx264", "-preset", "veryfast",
+                    "-c:a", "aac", str(out)],
+                   check=True, capture_output=True)
+
+
+def self_check(path):
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height:format=duration",
+         "-of", "json", str(path)],
+        check=True, capture_output=True, text=True)
+    data = json.loads(probe.stdout)
+    w, h = data["streams"][0]["width"], data["streams"][0]["height"]
+    dur = float(data["format"]["duration"])
+    assert (w, h) == (1080, 1920), f"bad resolution {w}x{h}"
+    assert abs(dur - CLIP_SECONDS) < 2, f"bad duration {dur}"
