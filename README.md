@@ -9,9 +9,10 @@ hook/credit text → upload. Spec + plan in `docs/superpowers/`.
    create an **API key** and an OAuth client (**Desktop app**).
 2. `YT_CLIENT_ID=... YT_CLIENT_SECRET=... python get_token.py` → copy
    refresh token.
-3. Export YouTube cookies (browser extension "Get cookies.txt", Netscape
-   format) — needed so yt-dlp works from GitHub's IPs. Re-export when
-   downloads start failing.
+3. Export YouTube cookies from a private/incognito YouTube session using a
+   browser extension that writes Netscape `cookies.txt` format. The pipeline
+   uses them for both the watch-page most-replayed lookup and yt-dlp downloads.
+   Re-export when either stage starts failing.
 4. Add GitHub secrets: `YT_API_KEY`, `YT_CLIENT_ID`, `YT_CLIENT_SECRET`,
    `YT_REFRESH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `YT_COOKIES`.
 

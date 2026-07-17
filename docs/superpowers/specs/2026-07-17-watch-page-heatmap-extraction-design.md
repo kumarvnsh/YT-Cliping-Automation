@@ -1,7 +1,7 @@
 # Watch-Page Heatmap Extraction — Design
 
 Date: 2026-07-17
-Status: Proposed
+Status: Approved and implemented
 
 ## Goal
 

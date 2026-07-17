@@ -102,6 +102,23 @@ def test_parse_watch_heatmap_ignores_oversized_integer_literals():
     assert pipeline.parse_watch_heatmap(html) == []
 
 
+def test_parse_watch_heatmap_ignores_float_overflowing_integer_values():
+    oversized_integer = "9" * 309
+    html = (
+        '{"heatMarkerRenderer": {"timeRangeStartMillis": ' + oversized_integer
+        + ', "markerDurationMillis": 5000, '
+        + '"heatMarkerIntensityScoreNormalized": 0.5}}'
+    )
+
+    assert pipeline.parse_watch_heatmap(html) == []
+
+
+def test_parse_watch_heatmap_ignores_truncated_marker_json():
+    html = '{"heatMarkerRenderer":{"timeRangeStartMillis":'
+
+    assert pipeline.parse_watch_heatmap(html) == []
+
+
 def test_fetch_watch_heatmap_uses_watch_url_and_parses_response(monkeypatch):
     class Response:
         def read(self):
@@ -221,6 +238,40 @@ def test_main_skips_no_heatmap_before_downloading(tmp_path, monkeypatch):
             {"start_time": 0, "end_time": 10, "value": 1},
         ],
     )
+    monkeypatch.setattr(
+        pipeline,
+        "download",
+        lambda vid: (downloaded.append(vid) or tmp_path / f"{vid}.mp4", {}),
+    )
+    monkeypatch.setattr(pipeline, "gen_metadata", lambda *_args: {
+        "title": "title", "description": "description", "hashtags": [], "hook": "hook",
+    })
+    monkeypatch.setattr(pipeline, "edit", lambda *_args: None)
+    monkeypatch.setattr(pipeline, "self_check", lambda _path: None)
+    monkeypatch.setattr(pipeline, "upload", lambda *_args: "id")
+    monkeypatch.setattr(sys, "argv", ["pipeline.py", "--dry-run"])
+    monkeypatch.setenv("YT_API_KEY", "test-key")
+
+    pipeline.main()
+
+    assert downloaded == ["second"]
+
+
+def test_main_skips_watch_fetch_error_and_downloads_next_candidate(tmp_path, monkeypatch):
+    used_file = tmp_path / "used_videos.json"
+    used_file.write_text("[]")
+    first, second = _vid("first", "PT10M"), _vid("second", "PT10M")
+    downloaded = []
+
+    def fetch_heatmap(vid):
+        if vid == "first":
+            raise OSError("network")
+        return [{"start_time": 0, "end_time": 10, "value": 1}]
+
+    monkeypatch.setattr(pipeline, "USED_FILE", used_file)
+    monkeypatch.setattr(pipeline, "LOG_FILE", tmp_path / "log.jsonl")
+    monkeypatch.setattr(pipeline, "fetch_trending", lambda _key: [first, second])
+    monkeypatch.setattr(pipeline, "fetch_watch_heatmap", fetch_heatmap)
     monkeypatch.setattr(
         pipeline,
         "download",

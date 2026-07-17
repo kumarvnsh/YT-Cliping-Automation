@@ -68,6 +68,14 @@ def _number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _finite_number(value):
+    """Return whether a JSON number can safely be treated as a finite float."""
+    try:
+        return _number(value) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def parse_watch_heatmap(html):
     """Extract and normalize embedded YouTube heat-marker renderers."""
     decoder = json.JSONDecoder()
@@ -84,9 +92,7 @@ def parse_watch_heatmap(html):
         start_ms = marker.get("timeRangeStartMillis")
         duration_ms = marker.get("markerDurationMillis")
         value = marker.get("heatMarkerIntensityScoreNormalized")
-        if not all(_number(item) for item in (start_ms, duration_ms, value)):
-            continue
-        if not all(math.isfinite(item) for item in (start_ms, duration_ms, value)):
+        if not all(_finite_number(item) for item in (start_ms, duration_ms, value)):
             continue
 
         start = start_ms / 1000

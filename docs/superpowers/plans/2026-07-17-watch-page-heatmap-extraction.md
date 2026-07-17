@@ -24,7 +24,7 @@ Spec: `docs/superpowers/specs/2026-07-17-watch-page-heatmap-extraction-design.md
 - Modify: `pipeline.py:1-55`
 - Test: `tests/test_pipeline.py`
 
-- [ ] **Step 1: Write the failing parser tests**
+- [x] **Step 1: Write the failing parser tests**
 
 Append these tests to `tests/test_pipeline.py`:
 
@@ -66,7 +66,7 @@ def test_parse_watch_heatmap_returns_empty_for_pages_without_markers():
     assert pipeline.parse_watch_heatmap("<html>no replay data</html>") == []
 ```
 
-- [ ] **Step 2: Run the parser tests to verify they fail**
+- [x] **Step 2: Run the parser tests to verify they fail**
 
 Run:
 
@@ -77,7 +77,7 @@ Run:
 Expected: all three tests fail with `AttributeError` because
 `pipeline.parse_watch_heatmap` does not yet exist.
 
-- [ ] **Step 3: Add the minimal pure parser**
+- [x] **Step 3: Add the minimal pure parser**
 
 Add `import math` near the other imports in `pipeline.py`, then add this below
 `pick_window`:
@@ -120,7 +120,7 @@ The `setdefault` deliberately keeps the first occurrence for duplicate time
 ranges. Do not add a dependency or parse a fixed `ytInitialPlayerResponse`
 path; `heatMarkerRenderer` may move within YouTube's page payload.
 
-- [ ] **Step 4: Run the parser tests to verify they pass**
+- [x] **Step 4: Run the parser tests to verify they pass**
 
 Run:
 
@@ -130,7 +130,7 @@ Run:
 
 Expected: 3 passed.
 
-- [ ] **Step 5: Commit the parser**
+- [x] **Step 5: Commit the parser**
 
 ```bash
 git add pipeline.py tests/test_pipeline.py
@@ -143,7 +143,7 @@ git commit -m "feat: parse watch-page heatmap markers"
 - Modify: `pipeline.py:1-230`
 - Modify: `tests/test_pipeline.py`
 
-- [ ] **Step 1: Write failing watch-page and orchestration tests**
+- [x] **Step 1: Write failing watch-page and orchestration tests**
 
 Append these tests to `tests/test_pipeline.py`:
 
@@ -212,7 +212,7 @@ monkeypatch.setattr(pipeline, "fetch_watch_heatmap", lambda _vid: [
 ])
 ```
 
-- [ ] **Step 2: Run the new tests to verify they fail**
+- [x] **Step 2: Run the new tests to verify they fail**
 
 Run:
 
@@ -223,7 +223,7 @@ Run:
 Expected: failure with `AttributeError` because
 `pipeline.fetch_watch_heatmap` does not yet exist.
 
-- [ ] **Step 3: Add the cookie-backed watch-page fetcher**
+- [x] **Step 3: Add the cookie-backed watch-page fetcher**
 
 Add these imports in `pipeline.py`:
 
@@ -258,7 +258,7 @@ def fetch_watch_heatmap(video_id):
     return parse_watch_heatmap(html)
 ```
 
-- [ ] **Step 4: Reorder candidate processing to fetch markers before download**
+- [x] **Step 4: Reorder candidate processing to fetch markers before download**
 
 Inside the candidate `try:` block in `main()`, replace the first three lines:
 
@@ -284,7 +284,7 @@ src, _info = download(vid)
 Keep `download()` returning `(path, info)` for now; do not refactor its public
 shape as part of this change.
 
-- [ ] **Step 5: Run focused and full tests to verify they pass**
+- [x] **Step 5: Run focused and full tests to verify they pass**
 
 Run:
 
@@ -297,7 +297,7 @@ Run:
 Expected: focused tests pass; the full suite passes; compilation emits no
 output.
 
-- [ ] **Step 6: Commit the fetcher and flow change**
+- [x] **Step 6: Commit the fetcher and flow change**
 
 ```bash
 git add pipeline.py tests/test_pipeline.py
@@ -309,7 +309,7 @@ git commit -m "feat: extract heatmaps from YouTube watch pages"
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Update the cookie setup description**
+- [x] **Step 1: Update the cookie setup description**
 
 Replace README setup item 3 with:
 
@@ -320,7 +320,7 @@ Replace README setup item 3 with:
    Re-export when either stage starts failing.
 ```
 
-- [ ] **Step 2: Verify documentation and repository state**
+- [x] **Step 2: Verify documentation and repository state**
 
 Run:
 
@@ -331,7 +331,7 @@ git diff --check
 
 Expected: no whitespace errors; all tests pass.
 
-- [ ] **Step 3: Commit the documentation**
+- [x] **Step 3: Commit the documentation**
 
 ```bash
 git add README.md
