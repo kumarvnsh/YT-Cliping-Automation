@@ -1,4 +1,3 @@
-import pipeline
 import json
 import signal
 import sys
@@ -6,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+import heatmaps
+import pipeline
 
 def _vid(vid_id, duration):
     return {"id": vid_id,
@@ -39,6 +40,35 @@ def test_pick_window_clamps_to_video_end():
                {"start_time": 0.0, "end_time": 10.0, "value": 0.1}]
     start = pipeline.pick_window(heatmap, duration=200)
     assert start <= 200 - pipeline.CLIP_SECONDS
+
+
+def test_normalize_heat_markers_keeps_first_duplicate_and_sorts():
+    markers = [
+        {"timeRangeStartMillis": 20_000, "markerDurationMillis": 5_000,
+         "heatMarkerIntensityScoreNormalized": 0.4},
+        {"timeRangeStartMillis": 0, "markerDurationMillis": 5_000,
+         "heatMarkerIntensityScoreNormalized": 0.7},
+        {"timeRangeStartMillis": 0, "markerDurationMillis": 5_000,
+         "heatMarkerIntensityScoreNormalized": 0.2},
+    ]
+
+    assert heatmaps.normalize_heat_markers(markers) == [
+        {"start_time": 0.0, "end_time": 5.0, "value": 0.7},
+        {"start_time": 20.0, "end_time": 25.0, "value": 0.4},
+    ]
+
+
+def test_normalize_heat_markers_ignores_invalid_numeric_values():
+    markers = [
+        {"timeRangeStartMillis": "0", "markerDurationMillis": 5_000,
+         "heatMarkerIntensityScoreNormalized": 0.5},
+        {"timeRangeStartMillis": 0, "markerDurationMillis": 0,
+         "heatMarkerIntensityScoreNormalized": 0.5},
+        {"timeRangeStartMillis": 0, "markerDurationMillis": 5_000,
+         "heatMarkerIntensityScoreNormalized": float("inf")},
+    ]
+
+    assert heatmaps.normalize_heat_markers(markers) == []
 
 
 def test_parse_watch_heatmap_normalizes_and_sorts_markers():

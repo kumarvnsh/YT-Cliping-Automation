@@ -1,7 +1,6 @@
 """Daily YT gaming shorts pipeline. See docs/superpowers/specs/ for design."""
 import argparse
 import json
-import math
 import os
 import re
 import signal
@@ -12,6 +11,8 @@ from contextlib import contextmanager
 from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 from urllib.request import HTTPCookieProcessor, Request, build_opener
+
+from heatmaps import parse_watch_heatmap
 
 CLIP_SECONDS = 35
 MIN_SOURCE_SECONDS = 120
@@ -59,58 +60,12 @@ def pick_window(heatmap, duration, clip=CLIP_SECONDS):
     return best_start
 
 
-HEAT_MARKER_RE = re.compile(r'"heatMarkerRenderer"\s*:\s*')
 WATCH_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 )
 WATCH_PAGE_SOCKET_TIMEOUT = 20
 WATCH_PAGE_TOTAL_TIMEOUT = 30
-
-
-def _number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def _finite_number(value):
-    """Return whether a JSON number can safely be treated as a finite float."""
-    try:
-        return _number(value) and math.isfinite(value)
-    except OverflowError:
-        return False
-
-
-def parse_watch_heatmap(html):
-    """Extract and normalize embedded YouTube heat-marker renderers."""
-    decoder = json.JSONDecoder()
-    markers = []
-    seen_ranges = set()
-    for match in HEAT_MARKER_RE.finditer(html):
-        try:
-            marker, _ = decoder.raw_decode(html, match.end())
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(marker, dict):
-            continue
-
-        start_ms = marker.get("timeRangeStartMillis")
-        duration_ms = marker.get("markerDurationMillis")
-        value = marker.get("heatMarkerIntensityScoreNormalized")
-        if not all(_finite_number(item) for item in (start_ms, duration_ms, value)):
-            continue
-
-        start = start_ms / 1000
-        end = (start_ms + duration_ms) / 1000
-        if (not math.isfinite(start) or not math.isfinite(end)
-                or duration_ms <= 0 or start < 0 or end <= start):
-            continue
-        marker_range = (start, end)
-        if marker_range in seen_ranges:
-            continue
-        seen_ranges.add(marker_range)
-        markers.append({"start_time": float(start), "end_time": float(end),
-                        "value": float(value)})
-    return sorted(markers, key=lambda marker: (marker["start_time"], marker["end_time"]))
 
 
 @contextmanager
