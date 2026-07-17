@@ -1,4 +1,5 @@
 """Read YouTube heat markers from the rendered Brave player."""
+import math
 import os
 import signal
 import time
@@ -18,6 +19,8 @@ BRAVE_EXECUTABLE = os.getenv(
 RENDERED_HEATMAP_TIMEOUT_SECONDS = 20
 RENDERED_HEATMAP_POLL_SECONDS = 1
 CLEANUP_INTERRUPT_SECONDS = 0.01
+CHROMIUM_EXPIRY_THRESHOLD = 10_000_000_000
+CHROMIUM_UNIX_EPOCH_OFFSET_SECONDS = 11_644_473_600
 
 PLAYER_MARKERS_SCRIPT = """
 () => {
@@ -87,6 +90,22 @@ def _is_youtube_domain(domain):
     return domain == "youtube.com" or domain.endswith(".youtube.com")
 
 
+def _playwright_expiry(expires):
+    """Return a valid Playwright expiry from a Netscape cookie expiry."""
+    if isinstance(expires, bool) or not isinstance(expires, (int, float)):
+        return -1
+    try:
+        if not math.isfinite(expires) or expires <= 0:
+            return -1
+        if expires > CHROMIUM_EXPIRY_THRESHOLD:
+            expires = (
+                expires / 1_000_000 - CHROMIUM_UNIX_EPOCH_OFFSET_SECONDS
+            )
+        return expires if math.isfinite(expires) and expires > 0 else -1
+    except OverflowError:
+        return -1
+
+
 def playwright_cookies(cookies):
     """Convert YouTube cookies from a Mozilla cookie jar for Playwright."""
     records = []
@@ -100,7 +119,7 @@ def playwright_cookies(cookies):
             "path": cookie.path or "/",
             "secure": bool(cookie.secure),
             "httpOnly": any(key.lower() == "httponly" for key in cookie._rest),
-            "expires": cookie.expires if cookie.expires and cookie.expires > 0 else -1,
+            "expires": _playwright_expiry(cookie.expires),
         })
     return records
 

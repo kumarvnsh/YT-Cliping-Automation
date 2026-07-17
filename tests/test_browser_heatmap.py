@@ -57,6 +57,17 @@ def test_playwright_cookies_maps_zero_expiry_to_session_cookie():
     assert [cookie["expires"] for cookie in playwright_cookies(cookies)] == [-1, 123]
 
 
+def test_playwright_cookies_converts_chromium_microsecond_epoch_expiry():
+    from browser_heatmap import playwright_cookies
+
+    chromium_expiry = 13_444_333_485_766_430
+    expected_expiry = 1_799_859_885.76643
+
+    assert playwright_cookies([_cookie(".youtube.com", expires=chromium_expiry)])[0][
+        "expires"
+    ] == expected_expiry
+
+
 def test_fetch_rendered_heatmap_normalizes_browser_markers_and_closes_context(monkeypatch):
     import browser_heatmap
 
