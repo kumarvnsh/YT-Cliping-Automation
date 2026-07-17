@@ -70,7 +70,7 @@ def parse_watch_heatmap(html):
     for match in HEAT_MARKER_RE.finditer(html):
         try:
             marker, _ = decoder.raw_decode(html, match.end())
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             continue
         if not isinstance(marker, dict):
             continue

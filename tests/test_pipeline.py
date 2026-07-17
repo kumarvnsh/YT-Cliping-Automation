@@ -91,6 +91,17 @@ def test_parse_watch_heatmap_rejects_overflowed_normalized_times():
     assert pipeline.parse_watch_heatmap(html) == []
 
 
+def test_parse_watch_heatmap_ignores_oversized_integer_literals():
+    oversized_integer = "9" * 4_301
+    html = (
+        '{"heatMarkerRenderer": {"timeRangeStartMillis": ' + oversized_integer
+        + ', "markerDurationMillis": 5000, '
+        + '"heatMarkerIntensityScoreNormalized": 0.5}}'
+    )
+
+    assert pipeline.parse_watch_heatmap(html) == []
+
+
 def test_gen_metadata_uses_openai(monkeypatch):
     meta = {"title": "T", "description": "D", "hashtags": ["#shorts"], "hook": "H"}
     monkeypatch.setattr(pipeline, "_openai_meta", lambda p: meta)
