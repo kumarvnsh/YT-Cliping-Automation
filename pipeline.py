@@ -85,7 +85,8 @@ def parse_watch_heatmap(html):
 
         start = start_ms / 1000
         end = (start_ms + duration_ms) / 1000
-        if duration_ms <= 0 or start < 0 or end <= start:
+        if (not math.isfinite(start) or not math.isfinite(end)
+                or duration_ms <= 0 or start < 0 or end <= start):
             continue
         marker_range = (start, end)
         if marker_range in seen_ranges:

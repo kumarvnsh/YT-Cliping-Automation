@@ -81,6 +81,16 @@ def test_parse_watch_heatmap_returns_empty_for_pages_without_markers():
     assert pipeline.parse_watch_heatmap("<html><body>no markers</body></html>") == []
 
 
+def test_parse_watch_heatmap_rejects_overflowed_normalized_times():
+    html = '''
+    {"heatMarkerRenderer": {"timeRangeStartMillis": 1e308,
+                            "markerDurationMillis": 1e308,
+                            "heatMarkerIntensityScoreNormalized": 0.5}}
+    '''
+
+    assert pipeline.parse_watch_heatmap(html) == []
+
+
 def test_gen_metadata_uses_openai(monkeypatch):
     meta = {"title": "T", "description": "D", "hashtags": ["#shorts"], "hook": "H"}
     monkeypatch.setattr(pipeline, "_openai_meta", lambda p: meta)
