@@ -462,6 +462,25 @@ def test_workflow_provisions_youtube_challenge_dependencies():
     assert "denoland/setup-deno@v2" in workflow
 
 
+def test_clip_cloud_workflow_runs_github_hosted_without_browser():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/clip-cloud.yml").read_text()
+
+    assert "runs-on: ubuntu-latest" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "schedule:" not in workflow
+    assert "url:" in workflow and "start:" in workflow
+    assert "pipeline.py --url" in workflow
+    # manual mode needs no heatmap, so no browser must be provisioned
+    assert "BRAVE_EXECUTABLE" not in workflow
+    assert "USE_RENDERED_HEATMAP" not in workflow
+    # cookies come from a secret here, not a local Brave export
+    assert "secrets.YT_COOKIES" in workflow
+    assert "export_cookies.py" not in workflow
+    assert "rm -f cookies.txt" in workflow
+    assert "FFMPEG_FONT: DejaVuSans" in workflow
+
+
 def test_workflow_uses_mac_runner_and_local_brave_cookie_export():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/daily.yml").read_text()

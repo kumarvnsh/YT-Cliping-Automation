@@ -1,0 +1,67 @@
+name: clip-cloud
+# Phone-friendly manual clip that needs no self-hosted Mac. Manual mode never
+# fetches a heatmap, so no Brave/Playwright is required here.
+concurrency:
+  group: daily-short
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: YouTube URL to clip from
+        type: string
+        required: true
+      start:
+        description: Start timestamp (SS, MM:SS, or HH:MM:SS)
+        type: string
+        required: true
+      dry_run:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg with drawtext
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          ffmpeg -hide_banner -filters 2>&1 | grep -q drawtext
+      - run: python -m pip install -r requirements.txt
+      - name: Write YouTube cookies
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            printf '%s' "$YT_COOKIES" > cookies.txt
+            echo "wrote cookies.txt"
+          else
+            echo "no YT_COOKIES secret set; download may hit YouTube bot checks"
+          fi
+      - name: Run manual clip
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python pipeline.py --url "${{ inputs.url }}" --start "${{ inputs.start }}" --dry-run
+          else
+            python pipeline.py --url "${{ inputs.url }}" --start "${{ inputs.start }}"
+          fi
+        env:
+          YT_API_KEY: ${{ secrets.YT_API_KEY }}
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FFMPEG_FONT: DejaVuSans
+      - name: Remove cookies
+        if: always()
+        run: rm -f cookies.txt
