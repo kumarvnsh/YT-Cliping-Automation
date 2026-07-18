@@ -479,6 +479,8 @@ def test_clip_cloud_workflow_runs_github_hosted_without_browser():
     assert "export_cookies.py" not in workflow
     assert "rm -f cookies.txt" in workflow
     assert "FFMPEG_FONT: DejaVuSans" in workflow
+    # yt-dlp needs a JS runtime or YouTube extraction degrades/fails
+    assert "denoland/setup-deno@v2" in workflow
 
 
 def test_workflow_uses_mac_runner_and_local_brave_cookie_export():
