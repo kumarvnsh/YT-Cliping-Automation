@@ -40,7 +40,20 @@ def _cfg(root=None) -> dict:
 
 
 def _token() -> str:
-    return os.environ.get("SHOTSNIP_META_TOKEN", "").strip()
+    token=os.environ.get("SHOTSNIP_META_TOKEN", "").strip()
+    if not token and os.name=='nt':
+        # Read fresh user settings: setx does not update an existing worker's environment.
+        token=_user_token()
+    return token
+
+
+def _user_token():
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,'Environment') as key:
+            return str(winreg.QueryValueEx(key,'SHOTSNIP_META_TOKEN')[0]).strip()
+    except (ImportError,OSError):
+        return ''
 
 
 def enabled(root=None) -> bool:
@@ -56,7 +69,7 @@ def _raise(r, step) -> None:
 def _page_token(user_token: str, page_id: str, ver: str) -> str:
     """Page publishing needs a Page token derived from the system-user token."""
     r = requests.get(f"{GRAPH}/{ver}/{page_id}",
-                     params={"fields": "access_token", "access_token": user_token}, timeout=30)
+                     params={"fields": "access_token"}, headers={'Authorization':'Bearer '+user_token}, timeout=30)
     _raise(r, "FB page-token fetch")
     tok = r.json().get("access_token")
     if not tok:
@@ -103,7 +116,7 @@ def post_reel(video, description: str, root=None, timeout_s: int = 300) -> str:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         s = requests.get(f"{GRAPH}/{ver}/{video_id}",
-                         params={"fields": "status", "access_token": token}, timeout=30)
+                         params={"fields": "status"}, headers={'Authorization':'Bearer '+token}, timeout=30)
         _raise(s, "FB reel status")
         phase = (s.json().get("status", {}).get("uploading_phase") or {}).get("status")
         if phase == "complete":

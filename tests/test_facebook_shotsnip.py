@@ -20,6 +20,7 @@ def test_facebook_enabled_requires_both_config_and_token(tmp_path, monkeypatch):
     # Arrange
     (tmp_path / "facebook.json").write_text(json.dumps({"enabled": True, "page_id": "1"}))
     monkeypatch.delenv("SHOTSNIP_META_TOKEN", raising=False)
+    monkeypatch.setattr(fb,'_user_token',lambda:'')
     # Act / Assert — config on, token off
     assert fb.enabled(tmp_path) is False
     # Act / Assert — both present

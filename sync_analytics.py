@@ -108,6 +108,13 @@ def owner_snapshot(config, snapshot):
 
 
 def _sync():
+    try:
+        import facebook_shotsnip
+        if facebook_shotsnip.enabled():
+            from sync_facebook import sync as sync_fb
+            sync_fb()
+    except Exception:
+        save(ROOT/'work/dashboard/facebook-health.json',{'status':'error','checked_at':datetime.now(timezone.utc).isoformat()})
     config = json.loads((ROOT / 'channel.json').read_text(encoding='utf-8'))
     snapshot = public_snapshot(config)
     if (ROOT / 'analytics_token.json').exists():
