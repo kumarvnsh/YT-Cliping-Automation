@@ -110,3 +110,32 @@ def test_ready_clip_releases_at_90_minutes(tmp_path,monkeypatch):
     state['last_upload_at']-=1
     assert worker.publish_ready(state,config)['status']=='uploaded'
     assert len(sent)==1
+
+
+def test_failed_capture_immediately_retries_without_resetting_upload_timer(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path/'work'); monkeypatch.setattr(worker,'ROOT',tmp_path)
+    worker.save(tmp_path/'scheduler.json',{'enabled':True})
+    calls=[]
+    def attempt(scan_only):
+        calls.append(1)
+        if len(calls)==1:
+            worker.save(worker.WORK/'state.json',{'failed_phase':'capturing','uploads':[],'last_upload_at':123})
+            raise RuntimeError('capture failed')
+        state=worker.read(worker.WORK/'state.json',{})
+        assert state['retry_pending'] and state['last_upload_at']==123
+        return {'status':'uploaded'}
+    monkeypatch.setattr(worker,'attempt_tick',attempt)
+    assert worker.tick()['status']=='uploaded' and len(calls)==2
+
+
+def test_uncertain_upload_never_retries(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path/'work'); monkeypatch.setattr(worker,'ROOT',tmp_path)
+    worker.save(tmp_path/'scheduler.json',{'enabled':True})
+    calls=[]
+    def attempt(scan_only):
+        calls.append(1)
+        worker.save(worker.WORK/'state.json',{'failed_phase':'uploading','uploads':[{'status':'uncertain'}]})
+        raise RuntimeError('upload uncertain')
+    monkeypatch.setattr(worker,'attempt_tick',attempt)
+    with pytest.raises(RuntimeError): worker.tick()
+    assert len(calls)==1

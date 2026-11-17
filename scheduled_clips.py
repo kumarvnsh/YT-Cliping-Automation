@@ -96,7 +96,7 @@ def capture(source, folder, seconds=180):
         headers = ''.join(f'{k}: {v}\r\n' for k, v in item.get('http_headers', info.get('http_headers', {})).items())
         command += ['-rw_timeout','20000000','-headers',headers,'-i',item['url']]
     command += ['-map','0:v:0','-map','1:a:0' if len(inputs)>1 else '0:a:0?',
-                '-t',str(seconds),'-c','copy','-movflags','+faststart',str(output)]
+                '-t',str(seconds),'-c','copy','-shortest','-movflags','+faststart',str(output)]
     from live_signals import LiveSignals
     signals=LiveSignals(source).start()
     try:
@@ -223,7 +223,7 @@ def publish_ready(state, config):
     return result
 
 
-def tick(scan_only=False):
+def attempt_tick(scan_only=False):
     WORK.mkdir(parents=True,exist_ok=True)
     with (WORK/'worker.lock').open('a+b') as lock:
         if lock.tell()==0:
@@ -234,6 +234,7 @@ def tick(scan_only=False):
         except OSError:
             return {'status':'already_running'}
         state=read(WORK/'state.json',{'uploads':[]})
+        retry=state.pop('retry_pending',False)
         try:
             config=read(ROOT/'scheduler.json',{})
             from clip_efficiency import cleanup
@@ -246,12 +247,12 @@ def tick(scan_only=False):
             combined=config.get('mode')=='scan_capture_upload'
             if combined:
                 base=max(state.get('last_cycle_at',0),state.get('last_upload_at',0))
-                if time.time()-base<config.get('scan_minutes',90)*60 and state.get('game',active_game())==active_game():
+                if not retry and time.time()-base<config.get('scan_minutes',90)*60 and state.get('game',active_game())==active_game():
                     return {'status':'cycle_not_due'}
                 state['last_cycle_at']=time.time(); save(WORK/'state.json',state)
             if not scan_only and not combined:
                 publish_ready(state,config)
-            scan_due=combined or time.time()-state.get('last_scan_at',0)>=config.get('scan_minutes',30)*60 or state.get('game',active_game())!=active_game()
+            scan_due=retry or combined or time.time()-state.get('last_scan_at',0)>=config.get('scan_minutes',30)*60 or state.get('game',active_game())!=active_game()
             if not scan_due and (scan_only or not state.get('selected') or len(state.get('ready_clips',[]))>=config.get('max_ready_clips',2)):
                 return {'status':'scan_not_due'}
             state.pop('error',None)
@@ -288,7 +289,8 @@ def tick(scan_only=False):
             selected=kitty_select(chosen,video,state)
             if not selected:
                 if combined:
-                    publish_ready(state,config)
+                    fallback=publish_ready(state,config)
+                    if fallback: return fallback
                 state['status']='no_quality_clip'; save(WORK/'state.json',state)
                 progress(state,'waiting','No highlight passed the quality check; retrying at a later scan')
                 return {'status':'no_quality_clip'}
@@ -299,13 +301,32 @@ def tick(scan_only=False):
             if spikes:
                 peak=max(spikes,key=lambda event:event['unique_chatters']/max(1,event['baseline']))
                 end=peak['capture_offset']-5
-            start=max(0,end-30)
-            if end-start<29:
-                raise RuntimeError('Selected moment cannot supply a full 30-second clip')
+            from media_safety import audio_bounds,safe_window
+            window=safe_window(audio_bounds(video),[end,float(selected['end_s'])])
+            if not window:
+                progress(state,'waiting','No selected 30-second highlight has complete audio; skipping this recording')
+                return {'status':'no_audio_safe_clip'}
+            start,end=window
+            if end!=float(selected['end_s']) and not spikes:
+                raise RuntimeError('Unexpected clip timing')
+            if spikes and end==float(selected['end_s']):
+                spikes=[]
             raw=folder/'highlight.mp4'
             progress(state,'finishing','Cutting the highlight and adding hook, captions and source credit')
             subprocess.run([ffmpeg(),'-v','error','-y','-ss',str(start),'-i',str(video),'-t','30',
                 '-c:v','libx264','-preset','veryfast','-c:a','aac',str(raw)],check=True,timeout=120)
+            import av
+            has_audio=safe_window(audio_bounds(raw),[30]) is not None
+            if not has_audio and spikes:
+                # A chat peak can land after a stream's audio stops. Use the scored moment instead.
+                end=float(selected['end_s']); start=max(0,end-30); spikes=[]
+                subprocess.run([ffmpeg(),'-v','error','-y','-ss',str(start),'-i',str(video),'-t','30',
+                    '-c:v','libx264','-preset','veryfast','-c:a','aac',str(raw)],check=True,timeout=120)
+                with av.open(str(raw)) as media:
+                    has_audio=bool(media.streams.audio)
+            if not has_audio or safe_window(audio_bounds(raw),[30]) is None:
+                raise RuntimeError('Selected clip has no audio; skipped before captioning')
+            subprocess.run([ffmpeg(),'-v','error','-xerror','-i',str(raw),'-f','null','-'],check=True,timeout=90)
             from finish_video import finish
             cached=None
             video_id=str(selected.get('video_id',''))
@@ -334,12 +355,33 @@ def tick(scan_only=False):
             result=publish_ready(state,config)
             return result or {'status':'queued','ready_clips':len(state['ready_clips'])}
         except Exception as exc:
+            state['failed_phase']=state.get('phase')
             state.update(status='error',error=str(exc),failed_at=now())
             progress(state,'error',str(exc))
             save(WORK/'state.json',state)
             raise
         finally:
             lock.seek(0); msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
+
+
+def tick(scan_only=False):
+    for number in range(1,4):
+        error=None
+        try:
+            result=attempt_tick(scan_only)
+            retry=not scan_only and result.get('status')=='no_quality_clip'
+        except Exception as exc:
+            error=exc
+            state=read(WORK/'state.json',{})
+            retry=state.get('failed_phase') in ('scanning','capturing','analyzing','finishing')
+        state=read(WORK/'state.json',{})
+        held=any(row.get('status') in ('pending','uncertain') for row in state.get('uploads',[]))
+        if retry and not held and number<3 and read(ROOT/'scheduler.json',{}).get('enabled'):
+            state['retry_pending']=True; state['retry_attempt']=number+1
+            progress(state,'retrying',f'Clip attempt {number} failed; trying another stream now ({number+1}/3)')
+            continue
+        if error: raise error
+        return result
 
 
 if __name__=='__main__':
