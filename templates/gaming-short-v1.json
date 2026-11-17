@@ -1,42 +1,42 @@
 {
-  "name": "Gaming Short v1",
-  "version": 1,
+  "name": "Gaming Short v2",
+  "version": 2,
   "styles_file": "gaming-short-v1.ass",
   "width": 1080,
   "height": 1920,
   "fps": 30,
-  "hook_wrap_characters": 23,
+  "hook_wrap_characters": 30,
   "positions": {
     "kicker": [
       540,
-      145
+      55
     ],
     "hook": [
       540,
-      225
+      110
     ],
     "caption": [
       540,
-      1290
+      1635
     ],
     "cta": [
       540,
-      1570
+      1740
     ],
     "credit": [
       540,
-      1760
+      1830
     ]
   },
   "cta": "Watch what happens at the end",
   "gameplay_box": {
     "width": 1080,
-    "height": 640,
-    "top": 560
+    "height": 1340,
+    "top": 280
   },
   "accent": {
     "x": 465,
-    "y": 525,
+    "y": 260,
     "width": 150,
     "height": 5,
     "color": "0xffe800"

@@ -11,13 +11,17 @@ import shutil
 import time
 import uuid
 import requests
-from game_schedule import active_game, title_matches
+from game_schedule import active_game, title_matches, IST
 from live_clipper import ffmpeg, resolve
-from stream_sources import scan, choose
+from stream_sources import scan, choose, choose_varied, any_gta
 
 ROOT = Path(__file__).resolve().parent
 WORK = ROOT / 'work' / 'scheduler'
 KITTY = 'http://127.0.0.1:8765'
+
+
+def source_allowed(source):
+    return bool(source.get('targeted') and source.get('game')=='gta') or source.get('game')==active_game()
 
 
 def save(path, value):
@@ -48,7 +52,7 @@ def usable_hook(selected, source):
     # English template: avoid putting garbled cross-language ASR back into a hook.
     if title and title.isascii() and len(title)<=100:
         return title
-    game='GTA VI' if source['game']=='gta6' else 'GTA V'
+    game='GTA' if source['game']=='gta' else 'GTA VI' if source['game']=='gta6' else 'GTA V'
     return f"{source['channel']}'s {game} live moment"[:100]
 
 
@@ -83,7 +87,7 @@ def capture(source, folder, seconds=180):
     if shutil.disk_usage(folder).free<3*1024**3:
         raise RuntimeError('Less than 3 GB free; capture paused')
     info = resolve(source['url'])
-    if source['platform']=='youtube' and not title_matches(info.get('title'),source['game']):
+    if source['platform']=='youtube' and not (any_gta(info.get('title')) if source.get('targeted') else title_matches(info.get('title'),source['game'])):
         raise RuntimeError('Live source title changed game since discovery; capture refused')
     output = folder / 'capture.mp4'
     command = [ffmpeg(), '-hide_banner', '-loglevel', 'warning', '-y']
@@ -114,10 +118,11 @@ def kitty_select(source, video, state=None):
         'channel':source['channel'], 'max_clips':1, 'min_score':55, 'captions':False,
         'focus':'A funny or surprising GTA gameplay moment with a clear payoff. Avoid loading screens and dead air.'})
     job_id = job.get('job_id', job.get('id'))
+    save(video.parent/'kitty-job.json',job)
     if job_id is None:
         raise RuntimeError('Clips Kitty did not return a job ID')
     api('/queue/resume', {})
-    deadline = time.monotonic()+1500
+    deadline = time.monotonic()+2100
     while time.monotonic() < deadline:
         if state is not None:
             state['heartbeat_at']=time.time(); save(WORK/'state.json',state)
@@ -130,7 +135,7 @@ def kitty_select(source, video, state=None):
                 return None
             return max(clips, key=lambda clip: clip.get('score', 0))
         time.sleep(5)
-    raise TimeoutError('Clips Kitty job exceeded 25 minutes; no upload was attempted')
+    raise TimeoutError('Clips Kitty job exceeded 35 minutes; no upload was attempted')
 
 
 def youtube():
@@ -147,14 +152,15 @@ def youtube():
 
 def publish(video, metadata, source, state):
     from googleapiclient.http import MediaFileUpload
-    if source['game'] != active_game():
+    if not source_allowed(source):
         raise RuntimeError('Game schedule switched during processing; old-game upload refused')
     if not read(ROOT/'scheduler.json',{}).get('enabled'):
         raise RuntimeError('Automatic posting was paused during processing')
     if any(row['status'] in ('pending','uncertain') for row in state.get('uploads',[])):
         raise RuntimeError('Unresolved upload; publishing held to prevent duplicates')
-    if time.time()-state.get('last_upload_at',0)<read(ROOT/'scheduler.json',{}).get('post_minutes',120)*60:
-        raise RuntimeError('Two-hour upload spacing has not elapsed')
+    config=read(ROOT/'scheduler.json',{})
+    if time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
+        raise RuntimeError('Upload window has not opened')
     digest=hashlib.sha256(video.read_bytes()).hexdigest()
     if any(row.get('sha256')==digest and row['status']=='uploaded' for row in state.get('uploads',[])):
         raise RuntimeError('This exact finished clip has already been uploaded')
@@ -169,7 +175,7 @@ def publish(video, metadata, source, state):
     try:
         result = yt.videos().insert(part='snippet,status', body={
             'snippet':{'title':metadata['title'][:100], 'description':metadata['description']+'\n\n'+marker,
-                'categoryId':'20', 'tags':['GTA6' if source['game']=='gta6' else 'GTA5','Shorts','Shotsnip']},
+                'categoryId':'20', 'tags':['GTA' if source['game']=='gta' else 'GTA6' if source['game']=='gta6' else 'GTA5','Shorts','Shotsnip']},
             'status':{'privacyStatus':'public','selfDeclaredMadeForKids':False}},
             media_body=MediaFileUpload(str(video),mimetype='video/mp4',resumable=True)).execute(num_retries=0)
     except Exception:
@@ -180,10 +186,38 @@ def publish(video, metadata, source, state):
         requested_privacy='public',returned_privacy=result.get('status',{}).get('privacyStatus'))
     state['last_upload_at']=time.time()
     save(WORK/'state.json', state)
+    latest=read(ROOT/'scheduler.json',{})
+    if latest.get('pending_scan_minutes'):
+        latest['scan_minutes']=latest.pop('pending_scan_minutes')
+        if latest.get('pending_post_minutes'):
+            latest['post_minutes']=latest.pop('pending_post_minutes')
+            latest['early_publish_minutes']=0
+        latest['mode']='scan_capture_upload'
+        save(ROOT/'scheduler.json',latest)
     metadata.update(uploaded=True,uploaded_video_id=result['id'],published_at=now())
     save(video.parent/'metadata.json', metadata)
     progress(state,'published','Clip published; waiting for the next posting window')
     return record
+
+
+def publish_ready(state, config):
+    queue=state.get('ready_clips',[])
+    keep=[]
+    for item in queue:
+        if any(row.get('status')=='uploaded' and Path(row.get('file','')).resolve()==Path(item['file']).resolve()
+               for row in state.get('uploads',[])):
+            continue
+        if source_allowed(item['source']) and datetime.fromtimestamp(item['ready_at'],IST).date()==datetime.fromtimestamp(time.time(),IST).date() and Path(item['file']).is_file():
+            keep.append(item)
+    state['ready_clips']=keep
+    save(WORK/'state.json',state)
+    if not keep or time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
+        return None
+    item=keep[0]; video=Path(item['file'])
+    result=publish(video,read(video.parent/'metadata.json',{}),item['source'],state)
+    state['ready_clips']=keep[1:]
+    save(WORK/'state.json',state)
+    return result
 
 
 def tick(scan_only=False):
@@ -199,34 +233,59 @@ def tick(scan_only=False):
         state=read(WORK/'state.json',{'uploads':[]})
         try:
             config=read(ROOT/'scheduler.json',{})
+            from clip_efficiency import cleanup
+            save(ROOT/'work/dashboard/cleanup.json',cleanup(ROOT,config.get('raw_retention_days',3),'D:/Clips-Kitty'))
             if not config.get('enabled',False):
                 progress(state,'paused','Automatic posting is paused')
                 return {'status':'disabled'}
             if any(row['status'] in ('pending','uncertain') for row in state['uploads']):
                 raise RuntimeError('Unresolved upload in ledger; publishing held to prevent duplicates')
-            if time.time()-state.get('last_scan_at',0)<config.get('scan_minutes',30)*60:
+            combined=config.get('mode')=='scan_capture_upload'
+            if combined:
+                base=max(state.get('last_cycle_at',0),state.get('last_upload_at',0))
+                if time.time()-base<config.get('scan_minutes',90)*60:
+                    return {'status':'cycle_not_due'}
+                state['last_cycle_at']=time.time(); save(WORK/'state.json',state)
+            if not scan_only and not combined:
+                publish_ready(state,config)
+            scan_due=combined or time.time()-state.get('last_scan_at',0)>=config.get('scan_minutes',30)*60 or state.get('game',active_game())!=active_game()
+            if not scan_due and (scan_only or not state.get('selected') or len(state.get('ready_clips',[]))>=config.get('max_ready_clips',2)):
                 return {'status':'scan_not_due'}
             state.pop('error',None)
-            progress(state,'scanning','Checking target channels and public live streams')
-            rows,errors=scan()
-            chosen=choose(rows)
-            state.update(last_scan_at=time.time(),checked_at=now(),game=active_game(),
-                         streams=rows,discovery_errors=errors,selected=chosen,status='scanned')
+            chosen=state.get('selected')
+            if scan_due:
+                progress(state,'scanning','Checking target channels and public live streams')
+                rows,errors=scan()
+                chosen=choose_varied(rows,state,config.get('streamer_cooldown_hours',6))
+                state.update(last_scan_at=time.time(),checked_at=now(),game=active_game(),
+                             streams=rows,discovery_errors=errors,selected=chosen,status='scanned')
+                save(WORK/'state.json',state)
+            chosen=choose_varied(state.get('streams',[]),state,config.get('streamer_cooldown_hours',6))
+            state['selected']=chosen
             save(WORK/'state.json',state)
-            if scan_only or not chosen or time.time()-state.get('last_upload_at',0)<config.get('post_minutes',120)*60:
-                progress(state,'waiting','No matching live stream found' if not chosen else 'Stream ranking refreshed; waiting for the posting window')
+            if scan_only or not chosen:
+                if combined and not scan_only:
+                    publish_ready(state,config)
+                progress(state,'waiting','No fresh streamer available; recent creators are on cooldown' if not chosen else 'Stream ranking refreshed')
                 return {'status':'scanned','selected':chosen}
+            if not combined and len(state.get('ready_clips',[]))>=config.get('max_ready_clips',2):
+                progress(state,'queued','Ready-clip queue is full; waiting for the posting window')
+                return {'status':'queue_full'}
             # An unavailable editor must not waste capture or post an arbitrary interval.
             ensure_kitty()
             api('/health/preflight')
             folder=WORK/(datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+chosen['id'])
             folder.mkdir()
             save(folder/'source.json',chosen)
+            state.setdefault('capture_history',[]).append({'at':time.time(),'source':chosen})
+            state['capture_history']=state['capture_history'][-100:]
             progress(state,'capturing',f"Capturing {config.get('capture_seconds',180)} seconds from {chosen['channel']}")
             video=capture(chosen,folder,config.get('capture_seconds',180))
             progress(state,'analyzing','Clips Kitty is finding and scoring highlights')
             selected=kitty_select(chosen,video,state)
             if not selected:
+                if combined:
+                    publish_ready(state,config)
                 state['status']='no_quality_clip'; save(WORK/'state.json',state)
                 progress(state,'waiting','No highlight passed the quality check; retrying at a later scan')
                 return {'status':'no_quality_clip'}
@@ -245,18 +304,32 @@ def tick(scan_only=False):
             subprocess.run([ffmpeg(),'-v','error','-y','-ss',str(start),'-i',str(video),'-t','30',
                 '-c:v','libx264','-preset','veryfast','-c:a','aac',str(raw)],check=True,timeout=120)
             from finish_video import finish
+            cached=None
+            video_id=str(selected.get('video_id',''))
+            import re
+            if re.fullmatch(r'[A-Za-z0-9_-]+',video_id):
+                transcript=read(Path('D:/Clips-Kitty/data/transcripts')/(video_id+'.json'),{})
+                from clip_efficiency import slice_transcript
+                sliced=slice_transcript(transcript,start,end)
+                if sliced['segments']:
+                    cached=folder/'cached-transcript.json'; save(cached,sliced)
             hook=usable_hook({} if spikes else selected,chosen)
             if spikes:
                 hook=chosen['channel']+' | GTA live reaction'
-            finished=finish(raw,hook,chosen['channel'],source_url=chosen['url'],
-                category='GTA VI / LIVE MOMENT' if chosen['game']=='gta6' else 'GTA V / LIVE MOMENT')
-            if active_game()!=chosen['game']:
+            finished=finish(raw,hook,chosen['channel'],transcript_file=cached,source_url=chosen['url'],
+                category='GTA / LIVE MOMENT' if chosen['game']=='gta' else 'GTA VI / LIVE MOMENT' if chosen['game']=='gta6' else 'GTA V / LIVE MOMENT')
+            if not source_allowed(chosen):
                 raise RuntimeError('Schedule changed during editing; old-game clip will not be uploaded')
             metadata=read(finished.parent/'metadata.json',{})
             save(folder/'selection.json',selected)
-            result=publish(finished,metadata,chosen,state)
-            state['status']='uploaded'; state.pop('error',None); save(WORK/'state.json',state)
-            return result
+            if combined:
+                return publish(finished,metadata,chosen,state)
+            state.setdefault('ready_clips',[]).append({'file':str(finished),'source':chosen,
+                'title':metadata['title'],'ready_at':time.time()})
+            state['status']='queued'; state.pop('error',None)
+            progress(state,'queued','Finished clip ready; waiting for its posting window')
+            result=publish_ready(state,config)
+            return result or {'status':'queued','ready_clips':len(state['ready_clips'])}
         except Exception as exc:
             state.update(status='error',error=str(exc),failed_at=now())
             progress(state,'error',str(exc))

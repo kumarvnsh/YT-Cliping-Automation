@@ -1,5 +1,7 @@
 # Shotsnip scheduled posting
 
+Capture and publishing are separate: each eligible run may prepare one finished clip before the posting window. Up to five ready clips stay in reserve for the current IST day; recording pauses when full. Publishing frees a slot. Unused reserves expire at midnight IST. Ready clips may publish in the last 30 minutes of the two-hour timer, which restarts after successful upload. Queue entries from the previous game or missing files are discarded. The dashboard shows the ready queue.
+
 Run `D:/YT-Cliping-Automation/.venv/Scripts/python.exe D:/YT-Cliping-Automation/scheduled_clips.py --tick` every 30 minutes on this PC. Codex's recurring automation invokes this command. Keep Codex running and the PC awake with an Internet connection. Windows currently has sleep disabled on AC and battery; no power settings were changed.
 
 `scheduler.json` controls enable/pause, 30-minute scanning, 120-minute minimum spacing between successful uploads, and a bounded 180-second capture. No suitable stream or quality clip means that posting interval is skipped. Cadence is a minimum spacing, not a promise of twelve uploads daily.

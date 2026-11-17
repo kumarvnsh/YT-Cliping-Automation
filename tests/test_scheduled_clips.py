@@ -69,3 +69,44 @@ def test_timeout_is_durable_and_second_attempt_never_calls_youtube(tmp_path,monk
 def test_non_english_generated_hook_uses_neutral_source_label():
     assert worker.usable_hook({'title':'\u092e\u0947\u0930\u0947 \u092d\u093e\u0908'},
         {'channel':'Creator','game':'gta5'})=="Creator's GTA V live moment"
+
+
+def test_ready_clip_waits_then_publishes(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path)
+    monkeypatch.setattr(worker,'active_game',lambda:'gta5')
+    clip=tmp_path/'ready.mp4'; clip.write_bytes(b'video')
+    row={'file':str(clip),'ready_at':worker.time.time(),'source':{'game':'gta5'}}
+    state={'last_upload_at':worker.time.time(),'ready_clips':[row]}
+    sent=[]
+    monkeypatch.setattr(worker,'publish',lambda *args: sent.append(args) or {'status':'uploaded'})
+    assert worker.publish_ready(state,{'post_minutes':120}) is None
+    assert not sent and len(state['ready_clips'])==1
+    state['last_upload_at']=0
+    assert worker.publish_ready(state,{'post_minutes':120})['status']=='uploaded'
+    assert len(sent)==1 and not state['ready_clips']
+
+
+def test_old_game_queue_is_discarded(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path)
+    monkeypatch.setattr(worker,'active_game',lambda:'gta6')
+    clip=tmp_path/'ready.mp4'; clip.write_bytes(b'video')
+    state={'ready_clips':[{'file':str(clip),'ready_at':worker.time.time(),'source':{'game':'gta5'}}]}
+    monkeypatch.setattr(worker,'publish',lambda *a:pytest.fail('wrong-game publish'))
+    assert worker.publish_ready(state,{}) is None
+    assert state['ready_clips']==[]
+
+
+def test_ready_clip_releases_at_90_minutes(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path)
+    monkeypatch.setattr(worker,'active_game',lambda:'gta5')
+    monkeypatch.setattr(worker.time,'time',lambda:100000)
+    clip=tmp_path/'ready.mp4'; clip.write_bytes(b'video')
+    state={'last_upload_at':100000-5399,'ready_clips':[{'file':str(clip),
+        'ready_at':99000,'source':{'game':'gta5'}}]}
+    sent=[]
+    monkeypatch.setattr(worker,'publish',lambda *args:sent.append(args) or {'status':'uploaded'})
+    config={'post_minutes':120,'early_publish_minutes':30}
+    assert worker.publish_ready(state,config) is None
+    state['last_upload_at']-=1
+    assert worker.publish_ready(state,config)['status']=='uploaded'
+    assert len(sent)==1

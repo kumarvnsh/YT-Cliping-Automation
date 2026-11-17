@@ -1,8 +1,15 @@
 {
   "enabled": true,
-  "scan_minutes": 30,
-  "post_minutes": 120,
-  "capture_seconds": 180,
-  "selection": "highest_live_viewers_targets_win_ties",
-  "privacy": "public"
+  "scan_minutes": 90,
+  "post_minutes": 90,
+  "capture_seconds": 300,
+  "selection": "rotate_streamers_then_highest_viewers",
+  "privacy": "public",
+  "max_ready_clips": 5,
+  "streamer_cooldown_hours": 6,
+  "early_publish_minutes": 0,
+  "mode": "scan_capture_upload",
+  "pending_scan_minutes": 30,
+  "pending_post_minutes": 30,
+  "raw_retention_days": 3
 }

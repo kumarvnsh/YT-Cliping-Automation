@@ -55,11 +55,32 @@ def owner_snapshot(config, snapshot):
     from googleapiclient.discovery import build
     credentials = Credentials.from_authorized_user_file(str(ROOT / 'analytics_token.json'))
     yt = build('youtube', 'v3', credentials=credentials, cache_discovery=False)
-    channel = yt.channels().list(part='id,snippet,statistics', mine=True).execute().get('items', [])
+    channel = yt.channels().list(part='id,snippet,statistics,contentDetails', mine=True).execute().get('items', [])
     if len(channel) != 1 or channel[0]['id'] != config['channel_id']:
         raise ValueError('Analytics authorization is for a different YouTube channel')
     stats = channel[0].get('statistics', {})
     snapshot['subscribers'] = int(stats['subscriberCount']) if 'subscriberCount' in stats else None
+    snapshot['total_views'] = int(stats['viewCount']) if 'viewCount' in stats else None
+    snapshot['reported_channel_views']=snapshot['total_views']
+    playlist=channel[0]['contentDetails']['relatedPlaylists']['uploads']
+    all_ids=[]; page=None
+    while True:
+        result=yt.playlistItems().list(part='contentDetails',playlistId=playlist,maxResults=50,pageToken=page).execute()
+        all_ids.extend(row['contentDetails']['videoId'] for row in result.get('items',[]))
+        page=result.get('nextPageToken')
+        if not page: break
+    from game_schedule import IST
+    today=datetime.now(IST).date()
+    total=0; today_uploads=0; measured=0
+    for offset in range(0,len(all_ids),50):
+        result=yt.videos().list(part='statistics,snippet,status',id=','.join(all_ids[offset:offset+50])).execute()
+        for item in result.get('items',[]):
+            if item['status']['privacyStatus']!='public': continue
+            views=int(item['statistics'].get('viewCount',0)); total+=views; measured+=1
+            if datetime.fromisoformat(item['snippet']['publishedAt'].replace('Z','+00:00')).astimezone(IST).date()==today:
+                today_uploads+=views
+    snapshot.update(total_views=total,total_views_source='sum_public_video_statistics',
+        total_videos_counted=measured,today_upload_views=today_uploads,today_ist=str(today))
     ids = [v['id'] for v in snapshot['videos']]
     if ids:
         response = yt.videos().list(part='statistics,snippet', id=','.join(ids)).execute()
@@ -98,6 +119,10 @@ def _sync():
     # Keep observation time so recent uploads can be compared at similar ages.
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     save(ROOT/'work/dashboard/analytics-history'/f'{stamp}.json',snapshot)
+    from clip_efficiency import checkpoints
+    observations=[json.loads(p.read_text(encoding='utf-8')) for p in (ROOT/'work/dashboard/analytics-history').glob('*.json')]
+    save(ROOT/'work/dashboard/age-performance.json',{'checked_at':snapshot['checked_at'],
+        'videos':checkpoints(observations),'note':'Real observations near 1h, 6h and 24h; no interpolation.'})
     print(f"Refreshed {config['name']}: {len(snapshot['videos'])} videos; owner analytics {snapshot['owner_analytics']['status']}")
     return snapshot
 
