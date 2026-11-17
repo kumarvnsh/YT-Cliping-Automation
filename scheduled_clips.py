@@ -196,6 +196,9 @@ def publish(video, metadata, source, state):
         save(ROOT/'scheduler.json',latest)
     metadata.update(uploaded=True,uploaded_video_id=result['id'],published_at=now())
     save(video.parent/'metadata.json', metadata)
+    import facebook_shotsnip as fb  # best-effort FB Page cross-post; never reverses the YT publish
+    fb.crosspost(record, video, metadata.get('title',''), metadata.get('description',''), ROOT)
+    save(WORK/'state.json', state)
     progress(state,'published','Clip published; waiting for the next posting window')
     return record
 
