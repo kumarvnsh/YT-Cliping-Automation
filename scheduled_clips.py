@@ -246,7 +246,7 @@ def tick(scan_only=False):
             combined=config.get('mode')=='scan_capture_upload'
             if combined:
                 base=max(state.get('last_cycle_at',0),state.get('last_upload_at',0))
-                if time.time()-base<config.get('scan_minutes',90)*60:
+                if time.time()-base<config.get('scan_minutes',90)*60 and state.get('game',active_game())==active_game():
                     return {'status':'cycle_not_due'}
                 state['last_cycle_at']=time.time(); save(WORK/'state.json',state)
             if not scan_only and not combined:

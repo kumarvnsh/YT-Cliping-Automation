@@ -1,6 +1,6 @@
 {
-  "timezone": "Asia/Kolkata",
-  "switch_at": "2026-11-19T00:00:00+05:30",
+  "timezone": "Pacific/Auckland",
+  "switch_at": "2026-11-19T00:00:00+13:00",
   "before_switch": "gta5",
   "from_switch": "gta6",
   "reject_unknown_or_mixed_titles": true

@@ -2,10 +2,11 @@ from datetime import datetime
 from game_schedule import active_game, title_matches
 
 
-def test_switch_at_midnight_ist_and_equivalent_utc_boundary():
-    assert active_game(datetime.fromisoformat('2026-11-18T23:59:59+05:30')) == 'gta5'
-    assert active_game(datetime.fromisoformat('2026-11-19T00:00:00+05:30')) == 'gta6'
-    assert active_game(datetime.fromisoformat('2026-11-18T18:30:00+00:00')) == 'gta6'
+def test_switch_at_midnight_nz_and_equivalent_utc_boundary():
+    assert active_game(datetime.fromisoformat('2026-11-18T23:59:59+13:00')) == 'gta5'
+    assert active_game(datetime.fromisoformat('2026-11-19T00:00:00+13:00')) == 'gta6'
+    assert active_game(datetime.fromisoformat('2026-11-18T11:00:00+00:00')) == 'gta6'
+    assert active_game(datetime.fromisoformat('2026-11-18T16:30:00+05:30')) == 'gta6'
 
 
 def test_reject_wrong_unknown_and_mixed_game_titles():
