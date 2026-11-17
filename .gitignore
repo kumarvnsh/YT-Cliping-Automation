@@ -3,3 +3,8 @@ work/
 cookies.txt
 *.mp4
 .venv/
+
+client_secret*.json
+token.json
+analytics_token.json
+.env

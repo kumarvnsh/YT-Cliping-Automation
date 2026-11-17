@@ -266,7 +266,8 @@ def upload(path, meta, privacy):
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload
-    creds = Credentials(
+    token_file = Path(__file__).resolve().parent / "token.json"
+    creds = Credentials.from_authorized_user_file(str(token_file)) if token_file.exists() else Credentials(
         None,
         refresh_token=os.environ["YT_REFRESH_TOKEN"],
         token_uri="https://oauth2.googleapis.com/token",

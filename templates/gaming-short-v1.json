@@ -1,0 +1,50 @@
+{
+  "name": "Gaming Short v1",
+  "version": 1,
+  "styles_file": "gaming-short-v1.ass",
+  "width": 1080,
+  "height": 1920,
+  "fps": 30,
+  "hook_wrap_characters": 23,
+  "positions": {
+    "kicker": [
+      540,
+      145
+    ],
+    "hook": [
+      540,
+      225
+    ],
+    "caption": [
+      540,
+      1290
+    ],
+    "cta": [
+      540,
+      1570
+    ],
+    "credit": [
+      540,
+      1760
+    ]
+  },
+  "cta": "Watch what happens at the end",
+  "gameplay_box": {
+    "width": 1080,
+    "height": 640,
+    "top": 560
+  },
+  "accent": {
+    "x": 465,
+    "y": 525,
+    "width": 150,
+    "height": 5,
+    "color": "0xffe800"
+  },
+  "background": {
+    "brightness": -0.16,
+    "saturation": 0.55,
+    "darken": 0.4
+  },
+  "reference_video": "work/live/20261117-111932-M9d7qlFtU1s/clip-manual-test-59-finished/finished-short.mp4"
+}

@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "updated_on": "2026-11-17",
+  "destination_channel": null,
+  "notes": [
+    "Watchlist configuration only; live monitoring is not implemented yet.",
+    "Resolve platform IDs before capture. Identity matching does not establish clipping rights.",
+    "Keep both Gareeb handles until channel IDs establish whether they are distinct."
+  ],
+  "creators": [
+    {
+      "id": "carryislive",
+      "name": "CarryisLive",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "CarryisLive",
+          "url": "https://www.youtube.com/@CarryisLive",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        }
+      ],
+      "twitch_lookup_status": "official_account_not_confirmed",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "gamerfleet",
+      "name": "GamerFleet",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "GamerFleet",
+          "url": "https://www.youtube.com/@GamerFleet",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        }
+      ],
+      "twitch_lookup_status": "official_account_not_confirmed",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "mythpat",
+      "name": "Mythpat",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "Mythpat",
+          "url": "https://www.youtube.com/@Mythpat",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        }
+      ],
+      "twitch_lookup_status": "official_account_not_confirmed",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "technogamerz",
+      "name": "Techno Gamerz",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "TechnoGamerzOfficial",
+          "url": "https://www.youtube.com/@TechnoGamerzOfficial",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        }
+      ],
+      "twitch_lookup_status": "official_account_not_confirmed",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "gareebooo",
+      "name": "Gareebooo",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "Gareebooo",
+          "url": "https://www.youtube.com/@Gareebooo",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        }
+      ],
+      "twitch_lookup_status": "official_account_not_confirmed",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "gareeboooo",
+      "name": "Gareeboooo",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "Gareeboooo",
+          "url": "https://www.youtube.com/@Gareeboooo",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        }
+      ],
+      "twitch_lookup_status": "official_account_not_confirmed",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "ishowspeed",
+      "name": "IShowSpeed",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "IShowSpeed",
+          "url": "https://www.youtube.com/@IShowSpeed",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        },
+        {
+          "platform": "twitch",
+          "login": "ishowspeed",
+          "url": "https://www.twitch.tv/ishowspeed",
+          "broadcaster_id": null,
+          "identity_status": "public_profile_matched",
+          "evidence_urls": [
+            "https://www.twitch.tv/ishowspeed"
+          ]
+        }
+      ],
+      "twitch_lookup_status": "matched",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "kaicenat",
+      "name": "Kai Cenat",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "KaiCenatLive",
+          "url": "https://www.youtube.com/@KaiCenatLive",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        },
+        {
+          "platform": "twitch",
+          "login": "kaicenat",
+          "url": "https://www.twitch.tv/kaicenat",
+          "broadcaster_id": null,
+          "identity_status": "public_profile_matched",
+          "evidence_urls": [
+            "https://www.twitch.tv/kaicenat"
+          ]
+        }
+      ],
+      "twitch_lookup_status": "matched",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "auronplay",
+      "name": "AuronPlay",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "AuronPlay",
+          "url": "https://www.youtube.com/@AuronPlay",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        },
+        {
+          "platform": "twitch",
+          "login": "auronplay",
+          "url": "https://www.twitch.tv/auronplay",
+          "broadcaster_id": null,
+          "identity_status": "public_profile_matched",
+          "evidence_urls": [
+            "https://www.twitch.tv/auronplay"
+          ]
+        }
+      ],
+      "twitch_lookup_status": "matched",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "pokimane",
+      "name": "Pokimane",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "twitch",
+          "login": "pokimane",
+          "url": "https://www.twitch.tv/pokimane",
+          "broadcaster_id": null,
+          "identity_status": "public_profile_matched",
+          "evidence_urls": [
+            "https://www.twitch.tv/pokimane"
+          ]
+        }
+      ],
+      "twitch_lookup_status": "matched",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "valkyrae",
+      "name": "Valkyrae",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "twitch",
+          "login": "valkyrae",
+          "url": "https://www.twitch.tv/valkyrae",
+          "broadcaster_id": null,
+          "identity_status": "public_profile_matched",
+          "evidence_urls": [
+            "https://www.twitch.tv/valkyrae"
+          ]
+        }
+      ],
+      "twitch_lookup_status": "matched",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "mortal",
+      "name": "MortaL",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "handle": "MortaLyt",
+          "url": "https://www.youtube.com/@MortaLyt",
+          "channel_id": null,
+          "identity_status": "user_supplied"
+        }
+      ],
+      "twitch_lookup_status": "not_checked",
+      "permission_status": "user_reported_not_independently_verified"
+    },
+    {
+      "id": "UC8WflNvMem7FJKbeFuw5jFQ",
+      "name": "SoulAman",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "url": "https://www.youtube.com/@SoulAman",
+          "identity_status": "channel_id_resolved",
+          "channel_id": "UC8WflNvMem7FJKbeFuw5jFQ",
+          "handle": "@SoulAman"
+        }
+      ],
+      "permission_status": "user_managed"
+    }
+  ]
+}

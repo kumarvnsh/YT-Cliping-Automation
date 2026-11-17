@@ -1,0 +1,7 @@
+-r requirements.txt
+imageio-ffmpeg>=0.6
+requests>=2.32
+faster-whisper>=1.2,<2
+av>=11,<19
+filelock>=3.10
+websocket-client>=1.8

@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "scan_minutes": 30,
+  "post_minutes": 120,
+  "capture_seconds": 180,
+  "selection": "highest_live_viewers_targets_win_ties",
+  "privacy": "public"
+}

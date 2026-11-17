@@ -1,5 +1,17 @@
 # yt-auto-animation — gaming shorts pipeline
 
+## Live creator watchlist
+
+The first local YouTube live capture/spike prototype is available in
+`live_clipper.py`. See [Windows setup and test commands](docs/live-clipping.md).
+
+`watchlist.json` records the requested YouTube sources and matched Twitch
+profiles, including Pokimane and Valkyrae. Unconfirmed Twitch matches are
+explicitly left absent. Platform IDs still need resolution. This configuration
+does not start monitoring: the current pipeline below processes recorded videos
+and does not yet consume the watchlist. The destination channel is unset until
+the user supplies their own clipper channel URL.
+
 Daily job: trending gaming video → most-replayed 35s → 9:16 short with
 hook/credit text → upload. Spec + plan in `docs/superpowers/`.
 
