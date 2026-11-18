@@ -9,9 +9,9 @@ import re
 def slice_transcript(transcript,start,end):
     result={'language':transcript.get('language','auto'),'duration':end-start,'segments':[],
             'review_status':'automatic_transcript_needs_review','model':'clips_kitty_cached'}
-    for segment in transcript.get('segments',[]):
+    for segment in transcript.get('segments') or []:
         words=[]
-        for word in segment.get('words',[]):
+        for word in segment.get('words') or []:
             if word['end']>start and word['start']<end:
                 words.append({**word,'start':max(0,word['start']-start),
                     'end':min(end-start,word['end']-start)})

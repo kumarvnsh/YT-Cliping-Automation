@@ -32,3 +32,13 @@ Interrupted publishing needs reconciliation before another upload is attempted.
 The worker can be invoked with `.venv/Scripts/python.exe manual_worker.py`.
 It claims one queued job; the dashboard dispatcher keeps claiming remaining jobs.
 No secrets are accepted through the job form or exported in its records.
+
+## Caption language
+
+Automatic captions retain Hindi for detected Hindi speech and use English for
+all other detected languages. English speech is transcribed directly; other
+languages are translated locally with Whisper. The manual speech-language
+selector corrects source-language detection; it does not change this output rule.
+English and Hindi cached transcripts can be reused. Other cached transcripts
+are replaced with an English translation of the selected clip. Metadata records
+both source and caption language and whether translation was applied.

@@ -30,14 +30,34 @@ def transcribe(source, model_name='small', language=None):
     segments, info = model.transcribe(str(source), beam_size=5, word_timestamps=True,
                                      vad_filter=True, condition_on_previous_text=False,
                                      language=language)
+    source_language = info.language
+    translated = source_language not in ('hi', 'en')
+    if translated:
+        # Language detection occurs before lazy segment decoding. Translate only
+        # the selected clip, retaining Whisper's timing for the English words.
+        segments, info = model.transcribe(str(source), beam_size=5, word_timestamps=True,
+                                         vad_filter=True, condition_on_previous_text=False,
+                                         language=source_language, task='translate')
     rows = []
     for segment in segments:
         rows.append({'start': segment.start, 'end': segment.end, 'text': segment.text,
                      'words': [{'start': w.start, 'end': w.end, 'word': w.word,
                                 'probability': w.probability} for w in segment.words or []]})
-    return {'language': info.language, 'language_probability': info.language_probability,
+    return {'language': 'en' if translated else source_language,
+            'source_language': source_language, 'translated': translated,
+            'language_probability': info.language_probability,
             'duration': info.duration, 'segments': rows,
             'model': model_name, 'review_status': 'automatic_transcript_needs_review'}
+
+
+def caption_transcript(source, model='small', language=None, transcript_file=None):
+    if transcript_file:
+        cached = json.loads(Path(transcript_file).read_text(encoding='utf-8'))
+        if cached.get('language') in ('hi', 'en') and (not language or language == cached.get('source_language', cached['language'])):
+            cached.setdefault('source_language', cached['language'])
+            cached.setdefault('translated', False)
+            return cached, True
+    return transcribe(source, model, language), False
 
 
 def ass_escape(text):
@@ -61,7 +81,7 @@ def caption_groups(transcript):
     for segment in transcript['segments']:
         words = []
         pending = ''
-        for original in segment.get('words', []):
+        for original in segment.get('words') or []:
             word = dict(original)
             if word['end'] <= word['start']:
                 pending += word['word']
@@ -164,8 +184,7 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
     output_dir.mkdir(parents=True, exist_ok=True)
     print('Preparing speech captions...', flush=True)
     stage_started = time.perf_counter()
-    transcript = (json.loads(Path(transcript_file).read_text(encoding='utf-8'))
-                  if transcript_file else transcribe(source, model, language))
+    transcript, used_cache = caption_transcript(source, model, language, transcript_file)
     timings['transcription_seconds'] = round(time.perf_counter() - stage_started, 2)
     stage_started = time.perf_counter()
     import av
@@ -209,6 +228,8 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
         raise ValueError('Finished video duration check failed')
     metadata = {'title': hook[:100], 'description': f'{category}\n\nSource: {creator}\n' + (source_url or ''),
                 'source_url': source_url, 'creator': creator, 'hook': hook, 'language': transcript['language'],
+                'source_language': transcript.get('source_language', transcript['language']),
+                'captions_translated': transcript.get('translated', False),
                 'caption_groups': count, 'transcript_review': transcript.get('review_status', 'automatic_transcript_needs_review'),
                 'input': str(source), 'output': str(output), 'content_crop': crop,
                 'duration_seconds': max(times), 'uploaded': False,
@@ -220,7 +241,7 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
                             '-frames:v', '1', str(output_dir / f'preview-{sec}.jpg')], check=True, timeout=30)
     timings['validation_and_previews_seconds'] = round(time.perf_counter() - stage_started, 2)
     timings['total_seconds'] = round(time.perf_counter() - total_started, 2)
-    timings['used_cached_transcript'] = bool(transcript_file)
+    timings['used_cached_transcript'] = used_cache
     timings['includes_capture_or_upload'] = False
     (output_dir / 'timings.json').write_text(json.dumps(timings, indent=2), encoding='utf-8')
     print(json.dumps(timings), flush=True)

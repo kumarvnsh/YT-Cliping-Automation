@@ -31,3 +31,40 @@ def test_zero_duration_words_are_preserved_with_the_next_word():
         {'word': ' mean', 'start': 1, 'end': 2}]}]}
     groups = caption_groups(transcript)
     assert groups[0][0]['word'].strip() == 'I mean'
+
+
+def test_caption_language_policy(monkeypatch):
+    from types import SimpleNamespace as N
+    import finish_video as f
+    for language in ('hi','en','es','pt','ja'):
+        calls=[]
+        class Model:
+            def transcribe(self, source, **kwargs):
+                calls.append(kwargs)
+                word=N(start=0,end=1,word='hello',probability=.9)
+                return iter([N(start=0,end=1,text='hello',words=[word])]),N(language=language,language_probability=.99,duration=1)
+        monkeypatch.setattr(f,'load_model',lambda name:Model())
+        result=f.transcribe('clip.mp4')
+        assert result['language']==('hi' if language=='hi' else 'en')
+        assert result['source_language']==language
+        assert result['translated']==(language not in ('hi','en'))
+        assert len(calls)==(1 if language in ('hi','en') else 2)
+        if len(calls)==2: assert calls[-1]['task']=='translate'
+
+
+def test_non_english_cache_cannot_bypass_translation(tmp_path,monkeypatch):
+    import json
+    import finish_video as f
+    cache=tmp_path/'transcript.json'
+    monkeypatch.setattr(f,'transcribe',lambda *args:{'language':'en','translated':True})
+    for language in ('es','hi','en'):
+        cache.write_text(json.dumps({'language':language,'segments':[]}))
+        result,used=f.caption_transcript('clip.mp4',transcript_file=cache)
+        assert used==(language in ('hi','en'))
+        assert result['language']==('hi' if language=='hi' else 'en')
+
+
+def test_missing_word_times_do_not_crash_cached_slicing():
+    from clip_efficiency import slice_transcript
+    assert slice_transcript({'language':'hi','segments':[{'words':None}]},0,30)['segments']==[]
+    assert slice_transcript({'segments':None},0,30)['segments']==[]
