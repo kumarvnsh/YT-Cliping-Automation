@@ -53,3 +53,19 @@ def test_chat_parser_uses_live_configuration_and_handles_current_message_shape()
         continuation({})
     with pytest.raises(ValueError):
         embedded_json('outdated browser', r'window\["ytInitialData"\]\s*=\s*')
+
+
+def test_segment_listing_retries_while_ffmpeg_locks_it(tmp_path, monkeypatch):
+    import live_clipper
+    (tmp_path / 'segment-000000.ts').write_bytes(b'x')
+    listing = tmp_path / 'segments.csv'
+    listing.write_text('segment-000000.ts,0.0,2.0\n', encoding='utf-8')
+    original, calls = Path.read_text, []
+    def locked_once(self, *args, **kwargs):
+        if self.name == 'segments.csv' and not calls:
+            calls.append(1)
+            raise PermissionError(13, 'The process cannot access the file', str(self))
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(Path, 'read_text', locked_once)
+    monkeypatch.setattr(live_clipper.time, 'sleep', lambda _: None)
+    assert live_clipper.completed_segments(tmp_path) == [(tmp_path / 'segment-000000.ts', 0.0, 2.0)]

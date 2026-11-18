@@ -90,8 +90,17 @@ def completed_segments(folder):
     listing = folder / 'segments.csv'
     if not listing.exists():
         return []
+    # On Windows ffmpeg briefly locks the list while rewriting it; retry the read.
+    for attempt in range(10):
+        try:
+            text = listing.read_text(encoding='utf-8')
+            break
+        except PermissionError:
+            if attempt == 9:
+                raise
+            time.sleep(.05 * (attempt + 1))
     result = []
-    for row in csv.reader(listing.read_text(encoding='utf-8').splitlines()):
+    for row in csv.reader(text.splitlines()):
         if len(row) != 3:
             continue
         try:
@@ -222,6 +231,7 @@ def monitor(url, seconds=180, test_clip_after=None, duration=30, reaction_delay=
     started = time.monotonic()
     last_progress = started
     last_segment_end = 0
+    previous_segments = []
     test_fired = False
     error = None
     with (folder / 'capture.log').open('w', encoding='utf-8') as capture_log:
@@ -235,7 +245,12 @@ def monitor(url, seconds=180, test_clip_after=None, duration=30, reaction_delay=
                 if active_game() != scheduled_game:
                     raise RuntimeError('Game schedule switched; stopping this source. Restart discovery for the new game.')
                 elapsed = time.monotonic() - started
-                segments = completed_segments(folder)
+                try:
+                    segments = completed_segments(folder)
+                except PermissionError:
+                    # Still locked by ffmpeg; reuse the last good listing this tick.
+                    segments = previous_segments
+                previous_segments = segments
                 if segments and segments[-1][2] > last_segment_end:
                     last_segment_end = segments[-1][2]
                     last_progress = time.monotonic()
