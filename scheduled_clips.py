@@ -35,6 +35,13 @@ def source_allowed(source):
 
 
 def save(path, value):
+    if path.resolve() == (WORK/'state.json').resolve():
+        if not isinstance(value.get('uploads'),list):
+            raise RuntimeError('Refusing to replace the publishing ledger with incomplete state')
+        if path.exists():
+            previous=json.loads(path.read_text(encoding='utf-8'))
+            if isinstance(previous.get('uploads'),list):
+                save(path.with_name('state.previous.json'),previous)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
     try:
@@ -176,6 +183,22 @@ def kitty_select(source, video, state=None):
             state['heartbeat_at']=time.time(); save(WORK/'state.json',state)
         result = api(f'/jobs/{job_id}')
         if result['status'] == 'failed':
+            from kitty_recovery import decoder_failure, recover
+            if decoder_failure(result.get('error')):
+                queue = api('/queue')
+                if queue.get('processing') or queue.get('queued'):
+                    raise RuntimeError('Software recovery deferred: editor has another active or queued job')
+                if state is not None:
+                    progress(state,'analyzing','Graphics decoder unavailable; recovering this recording with software decoding')
+                    state['last_repair']={'at':now(),'kind':'software_decode','job_id':job_id,'status':'running'}
+                def heartbeat():
+                    if state is not None:
+                        state['heartbeat_at']=time.time(); save(WORK/'state.json',state)
+                selected = recover(video, result['video_id'], heartbeat)
+                if state is not None:
+                    state['last_repair']['status']='recovered' if selected else 'no_quality_clip'
+                    progress(state,'analyzing','Software decoding recovered the highlight' if selected else 'Software analysis completed; no highlight passed the quality threshold')
+                return selected
             raise RuntimeError('Clips Kitty job failed; inspect its local job log')
         if result['status'] == 'done':
             clips = api('/videos/' + result['video_id'] + '/clips')
@@ -207,12 +230,14 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
     if any(row['status'] in ('pending','uncertain') for row in state.get('uploads',[])):
         raise RuntimeError('Unresolved upload; publishing held to prevent duplicates')
     config=read(ROOT/'scheduler.json',{})
-    if not manual and time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
+    if time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
         raise RuntimeError('Upload window has not opened')
     digest=hashlib.sha256(video.read_bytes()).hexdigest()
     if any(row.get('sha256')==digest and row['status'] in ('uploaded','pending','uncertain','quarantined') for row in state.get('uploads',[])):
         raise RuntimeError('This exact clip is already uploaded or quarantined; choose another clip')
     yt = youtube()  # Verify before creating any remote video.
+    from clip_titles import upload_title
+    metadata['title']=upload_title(source,metadata.get('title') or metadata.get('hook'),metadata.get('creator'))
     progress(state,'uploading','Uploading the finished clip to verified Shotsnip')
     operation = uuid.uuid4().hex
     marker = 'Shotsnip capture ' + operation

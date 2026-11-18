@@ -1,5 +1,6 @@
 """Authorize the local uploader without printing credentials."""
 from pathlib import Path
+import argparse
 import json
 from datetime import datetime, timezone
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -10,7 +11,11 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
           "https://www.googleapis.com/auth/youtube.readonly"]
 
 def main():
-    flow = InstalledAppFlow.from_client_secrets_file(str(ROOT / "client_secret.json"), SCOPES)
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--manage',action='store_true',help='Also authorize editing existing video titles and descriptions')
+    args=parser.parse_args()
+    scopes=SCOPES+(['https://www.googleapis.com/auth/youtube'] if args.manage else [])
+    flow = InstalledAppFlow.from_client_secrets_file(str(ROOT / "client_secret.json"), scopes)
     creds = flow.run_local_server(
         host="localhost", port=0, access_type="offline", prompt="consent",
         timeout_seconds=600,

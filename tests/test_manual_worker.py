@@ -51,3 +51,22 @@ def test_state_save_retries_transient_windows_lock(tmp_path,monkeypatch):
     assert worker.w.read(tmp_path/'state.json',{})=={'ok':True}
     assert len(attempts)==2
     assert not list(tmp_path.glob('*.tmp'))
+
+
+def test_manual_clip_waits_for_shared_six_hour_window(tmp_path,monkeypatch):
+    monkeypatch.setattr(jobs,'ROOT',tmp_path)
+    monkeypatch.setattr(worker.w,'ROOT',tmp_path)
+    monkeypatch.setattr(worker.w,'WORK',tmp_path/'work/scheduler')
+    worker.w.save(tmp_path/'scheduler.json',{'post_minutes':360,'early_publish_minutes':0})
+    identity=jobs.enqueue({'mode':'auto','publish':True})[0]
+    job=jobs.claim();job['result']={'file':'finished.mp4'}
+    state={'uploads':[],'last_upload_at':worker.time.time()-3600}
+    assert worker.defer_publication(job,state)
+    assert jobs.get(identity)['status']=='queued_publish'
+    state['last_upload_at']-=5*3600+1
+    assert not worker.defer_publication(job,state)
+
+
+def test_facebook_delivery_repair_does_not_wait_for_new_clip_window():
+    job={'options':{'platforms':['facebook']},'result':{'publication':{'youtube_id':'already-published'}}}
+    assert not worker.defer_publication(job,{'last_upload_at':worker.time.time()})

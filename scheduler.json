@@ -1,7 +1,7 @@
 {
   "enabled": true,
-  "scan_minutes": 60,
-  "post_minutes": 60,
+  "scan_minutes": 360,
+  "post_minutes": 360,
   "capture_seconds": 300,
   "selection": "rotate_streamers_then_highest_viewers",
   "privacy": "public",

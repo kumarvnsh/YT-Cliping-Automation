@@ -49,6 +49,9 @@ def exact_download(source,info,folder,window):
 
 def publish_result(job,result,state):
     options=job['options']; video=Path(result['file']); metadata=w.read(video.parent/'metadata.json',{})
+    from clip_titles import upload_title
+    metadata['title']=upload_title(result['source'],metadata.get('title') or metadata.get('hook'),metadata.get('creator'))
+    w.save(video.parent/'metadata.json',metadata)
     destinations=options['platforms']
     if 'youtube' in destinations:
         record=w.publish(video,metadata,result['source'],state,destinations=destinations,
@@ -74,6 +77,20 @@ def publish_result(job,result,state):
     return {'facebook':record.get('facebook')}
 
 
+def defer_publication(job,state):
+    # Retrying Facebook for an already-published YouTube clip is delivery
+    # recovery, not a new clip competing with the posting window.
+    if job['result'].get('publication',{}).get('youtube_id') and job['options']['platforms']==['facebook']:
+        return False
+    config=w.read(w.ROOT/'scheduler.json',{})
+    eligible=state.get('last_upload_at',0)+max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60
+    if time.time()>=eligible:return False
+    jobs.update(job['id'],status='queued_publish',stage='queued',result=job['result'],
+        note='Finished clip queued for the next posting window')
+    w.progress(state,'queued','Manual clip ready; waiting for the shared posting window')
+    return True
+
+
 def process(job):
     identity=job['id']; options=job['options']; state=w.read(w.WORK/'state.json',{'uploads':[]})
     folder=w.ROOT/'work/manual'/identity; folder.mkdir(exist_ok=True)
@@ -84,12 +101,13 @@ def process(job):
         w.progress(state,name,note)
     result=job['result']
     if job.get('publishing_only'):
+        if defer_publication(job,state):return
         stage('uploading','Publishing the reviewed manual clip')
         jobs.update(identity,status='publishing')
         result.setdefault('publication',{}).update(publish_result(job,result,state))
         partial='facebook' in options['platforms'] and (result['publication'].get('facebook') or {}).get('status')!='published'
         jobs.update(identity,status='partial' if partial else 'published',stage='partial' if partial else 'published',result=result,note='YouTube completed; Facebook needs attention' if partial else 'Publication completed')
-        w.progress(state,'published','Manual clip published; hourly timer restarted')
+        w.progress(state,'published','Manual clip published; posting timer restarted')
         return
     stage('scanning','Preparing manual clip source')
     if options['mode']=='auto':
@@ -145,15 +163,17 @@ def process(job):
     result.update(file=str(finished),title=w.read(finished.parent/'metadata.json',{})['title'])
     jobs.update(identity,result=result)
     if options['publish']:
+        job['result']=result
+        if defer_publication(job,state):return
         stage('uploading','Publishing to the selected destinations')
         jobs.update(identity,status='publishing')
         result.setdefault('publication',{}).update(publish_result(job,result,state))
         partial='facebook' in options['platforms'] and (result['publication'].get('facebook') or {}).get('status')!='published'
         jobs.update(identity,status='partial' if partial else 'published',stage='partial' if partial else 'published',result=result,note='Publication needs attention on Facebook' if partial else 'Publication completed')
-        w.progress(state,'published','Manual clip published; hourly timer restarted')
+        w.progress(state,'published','Manual clip published; posting timer restarted')
     else:
         jobs.update(identity,status='ready',stage='ready',result=result,note='Preview ready; waiting for your publish command')
-        w.progress(state,'ready','Manual preview ready; automatic hourly schedule remains active')
+        w.progress(state,'ready','Manual preview ready; automatic schedule remains active')
 
 
 def run():

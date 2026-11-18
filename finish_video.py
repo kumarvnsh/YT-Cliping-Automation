@@ -121,7 +121,7 @@ def build_subtitles(transcript, hook, creator, category='GTA V / ROLEPLAY'):
     template = load_template()
     duration = transcript['duration']
     title = '\n'.join(textwrap.wrap(hook.upper(), width=template['hook_wrap_characters'], break_long_words=False))
-    if len(title.splitlines()) > 3 or len(hook) > 90:
+    if not template.get('captions_only') and (len(title.splitlines()) > 3 or len(hook) > 90):
         raise ValueError('Use a hook of at most 90 characters / three short lines')
     header = (ROOT / 'templates' / template['styles_file']).read_text(encoding='utf-8')
     events = []
@@ -132,10 +132,11 @@ def build_subtitles(transcript, hook, creator, category='GTA V / ROLEPLAY'):
     def position(name):
         x, y = template['positions'][name]
         return '{' + f'\\pos({x},{y})' + '}'
-    event(0, duration, 'Kicker', position('kicker') + ass_escape(category.upper()))
-    event(0, duration, 'Hook', position('hook') + r'{\fad(120,0)}' + ass_escape(title))
-    event(0, duration, 'CTA', position('cta') + ass_escape(template['cta']))
-    event(0, duration, 'Credit', position('credit') + ass_escape(f'SOURCE / {creator.upper()}'))
+    if not template.get('captions_only'):
+        event(0, duration, 'Kicker', position('kicker') + ass_escape(category.upper()))
+        event(0, duration, 'Hook', position('hook') + r'{\fad(120,0)}' + ass_escape(title))
+        event(0, duration, 'CTA', position('cta') + ass_escape(template['cta']))
+        event(0, duration, 'Credit', position('credit') + ass_escape(f'SOURCE / {creator.upper()}'))
     srt = []
     groups = caption_groups(transcript)
     for number, group in enumerate(groups, 1):
@@ -189,6 +190,8 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
     stage_started = time.perf_counter()
     import av
     with av.open(str(source)) as container:
+        source_width=container.streams.video[0].width
+        source_height=container.streams.video[0].height
         if container.duration:
             transcript['duration'] = container.duration / av.time_base
     if not transcript.get('segments'):
@@ -199,10 +202,16 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
     (output_dir / 'captions.srt').write_text(srt, encoding='utf-8')
     crop = detect_content(source)
     width, height, x, y = crop
+    framing=None
+    if template.get('layout')=='clean_split':
+        from adaptive_framing import detect_camera,video_graph
+        detection=detect_camera(source,creator,output_dir)
+        graph,framing=video_graph(source_width,source_height,crop,detection.get('camera'),template)
+        framing['detection']=detection
     timings['layout_and_crop_seconds'] = round(time.perf_counter() - stage_started, 2)
     box, accent, background = template['gameplay_box'], template['accent'], template['background']
     # Foreground retains the complete gameplay; a dark blurred copy fills the canvas.
-    graph = (f'[0:v]crop={width}:{height}:{x}:{y},split=2[bg][fg];'
+    legacy_graph = (f'[0:v]crop={width}:{height}:{x}:{y},split=2[bg][fg];'
              '[bg]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,'
              f'boxblur=18:2,scale={template["width"]}:{template["height"]},'
              f'eq=brightness={background["brightness"]}:saturation={background["saturation"]},'
@@ -211,11 +220,27 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
              f'[back][front]overlay=x=(W-w)/2:y={box["top"]}+({box["height"]}-h)/2,'
              f'drawbox=x={accent["x"]}:y={accent["y"]}:w={accent["width"]}:h={accent["height"]}:color={accent["color"]}:t=fill,'
              f'ass=overlays.ass,fps={template["fps"]},setsar=1[out]')
+    if framing is None:graph=legacy_graph
+    music={'enabled':False}
+    inputs=[];audio_map='0:a:0'
+    if template.get('music',{}).get('enabled'):
+        from music_bed import original_bed
+        bed=original_bed(ROOT/'work/music')
+        gain=float(template['music'].get('volume',.1))
+        fade=max(0,transcript['duration']-1.5)
+        graph+=(';[0:a]asplit=2[original][sidechain];'
+            f'[1:a]volume={gain},afade=t=in:d=0.7,afade=t=out:st={fade}:d=1.5[bed];'
+            '[bed][sidechain]sidechaincompress=threshold=0.08:ratio=3:attack=20:release=400:makeup=1[ducked];'
+            '[original][ducked]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=11[aout]')
+        inputs=['-stream_loop','-1','-i',str(bed)]
+        audio_map='[aout]'
+        music={'enabled':True,'track':'original-gaming-beat-v1','type':'original_instrumental',
+               'volume':gain,'speech_ducking':True,'trending_track':False}
     output = output_dir / 'finished-short.mp4'
     print('Rendering finished Short...', flush=True)
     stage_started = time.perf_counter()
-    subprocess.run([ffmpeg(), '-hide_banner', '-loglevel', 'error', '-y', '-i', str(source),
-        '-filter_complex', graph, '-map', '[out]', '-map', '0:a:0', '-c:v', 'libx264',
+    subprocess.run([ffmpeg(), '-hide_banner', '-loglevel', 'error', '-y', '-hwaccel','none','-i', str(source),*inputs,
+        '-filter_complex', graph, '-map', '[out]', '-map', audio_map,'-t',str(transcript['duration']),'-c:v', 'libx264',
         '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-b:a', '160k',
         '-movflags', '+faststart', str(output)], cwd=output_dir, check=True, timeout=300)
     timings['render_seconds'] = round(time.perf_counter() - stage_started, 2)
@@ -233,7 +258,8 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
                 'caption_groups': count, 'transcript_review': transcript.get('review_status', 'automatic_transcript_needs_review'),
                 'input': str(source), 'output': str(output), 'content_crop': crop,
                 'duration_seconds': max(times), 'uploaded': False,
-                'template': template['name'], 'template_version': template['version']}
+                'template': template['name'], 'template_version': template['version'],
+                'framing':framing,'music':music}
     (output_dir / 'metadata.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding='utf-8')
     for sec in (1, 10, 20):
         if sec < transcript['duration']:
