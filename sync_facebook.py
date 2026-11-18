@@ -38,11 +38,17 @@ def sync():
         if reel: ids.setdefault(reel,{'id':reel,'title':'Shotsnip Reel'})
     for video in ids.values():
         row={**video,'views':None}
-        try:
-            metrics=get(video['id']+'/video_insights',metric='total_video_views',period='lifetime')
-            values=metrics.get('data',[])
-            row['views']=next((m['values'][-1]['value'] for m in values if m.get('values')),None)
-        except RuntimeError as exc: row['error']=str(exc)
+        # Classic videos report total_video_views; Reels leave it empty or reject it and
+        # report plays as blue_reels_play_count instead, so try both before giving up.
+        for metric in ('total_video_views','blue_reels_play_count'):
+            try:
+                metrics=get(video['id']+'/video_insights',metric=metric,period='lifetime')
+                values=metrics.get('data',[])
+                row['views']=next((m['values'][-1]['value'] for m in values if m.get('values')),None)
+            except RuntimeError as exc:
+                row['error']=str(exc); continue
+            if row['views'] is not None:
+                row.pop('error',None); break
         result['videos'].append(row)
     result['video_views']=sum(v['views'] for v in result['videos']) if all(v['views'] is not None for v in result['videos']) else None
     try:
