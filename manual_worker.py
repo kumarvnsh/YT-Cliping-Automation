@@ -1,0 +1,185 @@
+"""Run one dashboard job under the same lock as hourly clipping."""
+import hashlib
+import json
+import msvcrt
+from pathlib import Path
+import subprocess
+import sys
+import time
+import uuid
+import yt_dlp
+import manual_jobs as jobs
+import scheduled_clips as w
+from media_safety import audio_bounds,safe_window
+
+
+class Cancelled(Exception): pass
+
+
+def inspect(url):
+    with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'socket_timeout':20,'retries':1,
+        'format':'best[height<=720]/best' if 'twitch.tv/' in url else 'bestvideo[height<=720]+bestaudio/best[height<=720]'}) as y:
+        info=y.extract_info(url,download=False)
+    return info
+
+
+def exact_download(source,info,folder,window):
+    start,end=window
+    if info.get('duration') and info.get('live_status')!='is_live' and end>info['duration']:
+        raise ValueError('End timestamp is beyond the replay duration')
+    command=[sys.executable,'-m','yt_dlp','--no-playlist','--quiet','--no-warnings',
+        '--socket-timeout','20','--retries','1','--download-sections',f'*{start}-{end}',
+        '--force-keyframes-at-cuts','--merge-output-format','mp4','--remux-video','mp4',
+        '--ffmpeg-location','D:/Clips-Kitty/vendor/ffmpeg','-f',
+        'best[height<=720]/best' if source['platform']=='twitch' else 'bestvideo[height<=720]+bestaudio/best[height<=720]',
+        '-o',str(folder/'original.%(ext)s')]
+    if info.get('live_status')=='is_live': command+=['--live-from-start']
+    command.append(source['url'])
+    try:
+        with (folder/'download.log').open('w',encoding='utf-8') as log:
+            subprocess.run(command,stdout=log,stderr=log,check=True,timeout=600)
+    except (subprocess.CalledProcessError,subprocess.TimeoutExpired):
+        raise RuntimeError('Requested interval could not be downloaded. Live sources need DVR; try again when the replay is available.') from None
+    output=folder/'original.mp4'
+    if not output.is_file(): raise RuntimeError('No readable MP4 was produced')
+    if not safe_window(audio_bounds(output),[end-start],duration=end-start):
+        raise RuntimeError('Requested interval does not contain complete audio')
+    return output
+
+
+def publish_result(job,result,state):
+    options=job['options']; video=Path(result['file']); metadata=w.read(video.parent/'metadata.json',{})
+    destinations=options['platforms']
+    if 'youtube' in destinations:
+        record=w.publish(video,metadata,result['source'],state,destinations=destinations,
+            privacy=options['privacy'],manual=True)
+        return {'youtube_id':record['video_id'],'youtube_privacy':record.get('returned_privacy'),
+                'facebook':record.get('facebook')}
+    import facebook_shotsnip as fb
+    if fb._cfg().get('page_id')!='1435307842999791' or not fb.enabled():
+        raise RuntimeError('Shotsnip Facebook Page is not connected')
+    digest=hashlib.sha256(video.read_bytes()).hexdigest()
+    for previous in state.get('uploads',[]):
+        if previous.get('sha256')==digest and previous.get('facebook',{}).get('status')=='published':
+            return {'facebook':previous['facebook']}
+        if previous.get('sha256')==digest and previous.get('status') in ('facebook_pending','facebook_uncertain'):
+            raise RuntimeError('Facebook outcome is uncertain; reconcile before retrying')
+    record={'operation':uuid.uuid4().hex,'status':'facebook_pending','sha256':digest,
+        'file':str(video),'source':result['source'],'started_at':w.now()}
+    state.setdefault('uploads',[]).append(record); w.save(w.WORK/'state.json',state)
+    fb.crosspost(record,video,metadata['title'],metadata['description'],w.ROOT)
+    record['status']='facebook_published' if record.get('facebook',{}).get('status')=='published' else 'facebook_uncertain'
+    if record['status']=='facebook_published': state['last_upload_at']=time.time()
+    w.save(w.WORK/'state.json',state)
+    return {'facebook':record.get('facebook')}
+
+
+def process(job):
+    identity=job['id']; options=job['options']; state=w.read(w.WORK/'state.json',{'uploads':[]})
+    folder=w.ROOT/'work/manual'/identity; folder.mkdir(exist_ok=True)
+    def stage(name,note):
+        if jobs.get(identity)['cancel']: raise Cancelled()
+        jobs.update(identity,stage=name,note=note)
+        state['manual_job_id']=identity
+        w.progress(state,name,note)
+    result=job['result']
+    if job.get('publishing_only'):
+        stage('uploading','Publishing the reviewed manual clip')
+        jobs.update(identity,status='publishing')
+        result.setdefault('publication',{}).update(publish_result(job,result,state))
+        partial='facebook' in options['platforms'] and (result['publication'].get('facebook') or {}).get('status')!='published'
+        jobs.update(identity,status='partial' if partial else 'published',stage='partial' if partial else 'published',result=result,note='YouTube completed; Facebook needs attention' if partial else 'Publication completed')
+        w.progress(state,'published','Manual clip published; hourly timer restarted')
+        return
+    stage('scanning','Preparing manual clip source')
+    if options['mode']=='auto':
+        rows,_=w.scan(); source=w.choose_varied(rows,state)
+        if not source:
+            from archive_streams import discover_yesterday
+            source=w.choose_varied(discover_yesterday(),state)
+        if not source: raise RuntimeError('No eligible live stream or yesterday replay is available')
+        source={**source,'manual':True}
+        info=inspect(source['url'])
+    else:
+        info=inspect(options['url'])
+        live=info.get('live_status')=='is_live'
+        if options['mode']=='live' and not live: raise ValueError('This source is not live; choose replay or exact timestamps')
+        if options['mode']=='replay' and live: raise ValueError('This source is live; choose live mode or an exact DVR interval')
+        source={'id':info['id'],'platform':'twitch' if 'twitch.tv/' in options['url'] else 'youtube',
+            'url':options['url'],'title':info.get('title','Manual source'),
+            'channel':info.get('channel') or info.get('uploader') or 'Source creator',
+            'game':'custom','manual':True,'targeted':False,'archive':not live,
+            'viewers':info.get('concurrent_view_count') or info.get('view_count')}
+    state['selected']=source
+    result={'source':source}; jobs.update(identity,result=result)
+    w.save(folder/'source.json',source)
+    cached=None
+    if options['mode']=='exact':
+        stage('capturing','Downloading the requested timestamp interval')
+        raw=exact_download(source,info,folder,options['window'])
+    else:
+        stage('capturing',f"Recording a {options['capture_seconds']}-second window from {source['channel']}")
+        video=w.capture(source,folder,options['capture_seconds'])
+        stage('analyzing','Finding the best highlight with Clips Kitty')
+        w.ensure_kitty(); selected=w.kitty_select(source,video,state)
+        if not selected: raise RuntimeError('No highlight passed the quality threshold')
+        window=safe_window(audio_bounds(video),[float(selected['end_s'])])
+        if not window: raise RuntimeError('The selected highlight has no complete audio interval')
+        start,end=window; raw=folder/'highlight.mp4'
+        subprocess.run([w.ffmpeg(),'-v','error','-y','-ss',str(start),'-i',str(video),'-t','30',
+            '-map','0:v:0','-map','0:a:0','-c:v','libx264','-preset','veryfast','-c:a','aac',str(raw)],check=True,timeout=120)
+        video_id=str(selected.get('video_id',''))
+        import re
+        if re.fullmatch(r'[A-Za-z0-9_-]+',video_id):
+            from clip_efficiency import slice_transcript
+            transcript=w.read(Path('D:/Clips-Kitty/data/transcripts')/(video_id+'.json'),{})
+            sliced=slice_transcript(transcript,start,end)
+            if sliced['segments'] and options['language'] in ('auto',sliced['language']):
+                cached=folder/'cached-transcript.json'; w.save(cached,sliced)
+        w.save(folder/'selection.json',selected)
+    stage('finishing','Adding the hook, speech captions and source credit')
+    from finish_video import finish
+    finished=finish(raw,(options['hook'] or source['channel']+' | Stream highlight')[:85],source['channel'],
+        transcript_file=cached,language=None if options['language']=='auto' else options['language'],
+        source_url=source['url'],category='GAMING / STREAM HIGHLIGHT')
+    result.update(file=str(finished),title=w.read(finished.parent/'metadata.json',{})['title'])
+    jobs.update(identity,result=result)
+    if options['publish']:
+        stage('uploading','Publishing to the selected destinations')
+        jobs.update(identity,status='publishing')
+        result.setdefault('publication',{}).update(publish_result(job,result,state))
+        partial='facebook' in options['platforms'] and (result['publication'].get('facebook') or {}).get('status')!='published'
+        jobs.update(identity,status='partial' if partial else 'published',stage='partial' if partial else 'published',result=result,note='Publication needs attention on Facebook' if partial else 'Publication completed')
+        w.progress(state,'published','Manual clip published; hourly timer restarted')
+    else:
+        jobs.update(identity,status='ready',stage='ready',result=result,note='Preview ready; waiting for your publish command')
+        w.progress(state,'ready','Manual preview ready; automatic hourly schedule remains active')
+
+
+def run():
+    w.WORK.mkdir(parents=True,exist_ok=True)
+    with (w.WORK/'worker.lock').open('a+b') as lock:
+        if lock.tell()==0: lock.write(b'0'); lock.flush()
+        lock.seek(0)
+        try: msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
+        except OSError: return
+        job=None
+        try:
+            jobs.recover_interrupted()
+            job=jobs.claim()
+            if job: process(job)
+        except Cancelled:
+            jobs.update(job['id'],status='cancelled',stage='cancelled',note='Stopped after the last completed stage')
+            state=w.read(w.WORK/'state.json',{}); w.progress(state,'waiting','Manual job cancelled')
+        except Exception as exc:
+            if job:
+                current=jobs.get(job['id']); publishing=current['status']=='publishing'
+                message=str(exc) if isinstance(exc,(RuntimeError,ValueError)) else type(exc).__name__+'; inspect the local job log'
+                jobs.update(job['id'],status='attention' if publishing else 'failed',stage='attention' if publishing else 'failed',
+                    error=message,note='Publishing needs review' if publishing else 'Processing failed; retry or edit the request')
+                state=w.read(w.WORK/'state.json',{}); w.progress(state,'error',message)
+        finally:
+            lock.seek(0); msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
+
+
+if __name__=='__main__': run()

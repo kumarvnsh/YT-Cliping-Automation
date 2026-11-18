@@ -139,3 +139,22 @@ def test_uncertain_upload_never_retries(tmp_path,monkeypatch):
     monkeypatch.setattr(worker,'attempt_tick',attempt)
     with pytest.raises(RuntimeError): worker.tick()
     assert len(calls)==1
+
+
+def test_known_youtube_rejection_does_not_create_uncertain_hold(tmp_path,monkeypatch):
+    from googleapiclient.errors import HttpError
+    from httplib2 import Response
+    monkeypatch.setattr(worker,'WORK',tmp_path/'work'); monkeypatch.setattr(worker,'ROOT',tmp_path)
+    monkeypatch.setattr(worker,'active_game',lambda:'gta5')
+    worker.save(tmp_path/'scheduler.json',{'enabled':True})
+    video=tmp_path/'clip.mp4'; video.write_bytes(b'video')
+    class API:
+        def videos(self): return self
+        def insert(self,**kw): return self
+        def execute(self,**kw):
+            raise HttpError(Response({'status':'403'}),b'{"error":{"errors":[{"reason":"uploadLimitExceeded"}]}}')
+    monkeypatch.setattr(worker,'youtube',lambda:API())
+    state={'uploads':[]}
+    with pytest.raises(RuntimeError,match='uploadLimitExceeded'):
+        worker.publish(video,{'title':'test','description':'source'},{'game':'gta5'},state)
+    assert state['uploads'][0]['status']=='rejected'

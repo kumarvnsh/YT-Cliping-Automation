@@ -239,7 +239,7 @@
     {
       "id": "UC8WflNvMem7FJKbeFuw5jFQ",
       "name": "SoulAman",
-      "enabled": true,
+      "enabled": false,
       "sources": [
         {
           "platform": "youtube",
@@ -247,6 +247,21 @@
           "identity_status": "channel_id_resolved",
           "channel_id": "UC8WflNvMem7FJKbeFuw5jFQ",
           "handle": "@SoulAman"
+        }
+      ],
+      "permission_status": "user_managed"
+    },
+    {
+      "id": "UCwA3yPBSbZpwse6Q0aA2LPg",
+      "name": "PAYAL GAMING",
+      "enabled": true,
+      "sources": [
+        {
+          "platform": "youtube",
+          "url": "https://www.youtube.com/@PAYALGAMING",
+          "identity_status": "channel_id_resolved",
+          "channel_id": "UCwA3yPBSbZpwse6Q0aA2LPg",
+          "handle": "@PAYALGAMING"
         }
       ],
       "permission_status": "user_managed"

@@ -65,7 +65,8 @@ def resolve(url):
     import yt_dlp
     with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True,
                           'socket_timeout': 20, 'retries': 2, 'source_address': '0.0.0.0',
-                          'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]'}) as ydl:
+                          'format': ('best[height<=720]/best' if 'twitch.tv/' in url else
+                                     'bestvideo[height<=720]+bestaudio/best[height<=720]')}) as ydl:
         info = ydl.extract_info(url, download=False)
     if info.get('live_status') != 'is_live':
         raise ValueError('Source is not currently live')

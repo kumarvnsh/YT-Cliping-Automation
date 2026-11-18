@@ -95,7 +95,9 @@ def choose_varied(rows, state, cooldown_hours=6):
                 blocked.add(key(item['source']))
         except (ValueError,KeyError):
             continue
-    eligible=[row for row in rows if key(row) not in blocked]
+    used_replays={item.get('source',{}).get('id') for item in state.get('uploads',[])}
+    used_replays.update(item.get('source',{}).get('id') for item in state.get('capture_history',[]))
+    eligible=[row for row in rows if key(row) not in blocked and not (row.get('archive') and row['id'] in used_replays)]
     targets=[row for row in eligible if row.get('targeted')]
     return choose(targets or eligible)
 

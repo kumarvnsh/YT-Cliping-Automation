@@ -20,15 +20,35 @@ WORK = ROOT / 'work' / 'scheduler'
 KITTY = 'http://127.0.0.1:8765'
 
 
+class StopRequested(Exception): pass
+
+
+def stop_after_stage():
+    flag=WORK/'stop-after-stage'
+    if flag.exists():
+        flag.unlink()
+        raise StopRequested()
+
+
 def source_allowed(source):
-    return bool(source.get('targeted') and source.get('game')=='gta') or source.get('game')==active_game()
+    return bool(source.get('manual')) or bool(source.get('targeted') and source.get('game')=='gta') or source.get('game')==active_game()
 
 
 def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix('.tmp')
-    temp.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding='utf-8')
-    temp.replace(path)
+    temp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        temp.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding='utf-8')
+        for attempt in range(10):
+            try:
+                temp.replace(path)
+                return
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(.1 * (attempt + 1))
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def read(path, default):
@@ -57,8 +77,16 @@ def usable_hook(selected, source):
 
 
 def api(path, payload=None):
-    response = (requests.get(KITTY + path, timeout=30) if payload is None else
-                requests.post(KITTY + path, json=payload, timeout=60))
+    if payload is None:
+        for attempt in range(3):
+            try:
+                response=requests.get(KITTY+path,timeout=30)
+                break
+            except (requests.Timeout,requests.ConnectionError):
+                if attempt==2: raise
+                time.sleep(1)
+    else:
+        response=requests.post(KITTY+path,json=payload,timeout=60)
     response.raise_for_status()
     return response.json()
 
@@ -86,26 +114,46 @@ def capture(source, folder, seconds=180):
     """Bounded public media capture; Twitch uses an anonymous playback token."""
     if shutil.disk_usage(folder).free<3*1024**3:
         raise RuntimeError('Less than 3 GB free; capture paused')
-    info = resolve(source['url'])
-    if source['platform']=='youtube' and not (any_gta(info.get('title')) if source.get('targeted') else title_matches(info.get('title'),source['game'])):
+    if source.get('archive'):
+        import yt_dlp
+        with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'socket_timeout':20,
+            'format':('best[height<=720]/best' if source['platform']=='twitch' else 'bestvideo[height<=720]+bestaudio/best[height<=720]')}) as y:
+            info=y.extract_info(source['url'],download=False)
+        if info.get('live_status') not in ('was_live','post_live') and not source.get('manual'):
+            raise RuntimeError('Replay is no longer a completed public stream')
+        from archive_streams import replay_window
+        offset,signal=replay_window(info,folder,seconds)
+        save(folder/'replay-signal.json',{'offset':offset,**signal})
+    else:
+        info = resolve(source['url'])
+        offset=None
+    if not source.get('manual') and source['platform']=='youtube' and not (any_gta(info.get('title')) if source.get('targeted') else title_matches(info.get('title'),source['game'])):
         raise RuntimeError('Live source title changed game since discovery; capture refused')
     output = folder / 'capture.mp4'
     command = [ffmpeg(), '-hide_banner', '-loglevel', 'warning', '-y']
     inputs = info.get('requested_formats') or [info]
     for item in inputs:
         headers = ''.join(f'{k}: {v}\r\n' for k, v in item.get('http_headers', info.get('http_headers', {})).items())
-        command += ['-rw_timeout','20000000','-headers',headers,'-i',item['url']]
+        command += ['-rw_timeout','20000000','-headers',headers]
+        if offset is not None: command+=['-ss',str(offset)]
+        command+=['-i',item['url']]
     command += ['-map','0:v:0','-map','1:a:0' if len(inputs)>1 else '0:a:0?',
                 '-t',str(seconds),'-c','copy','-shortest','-movflags','+faststart',str(output)]
     from live_signals import LiveSignals
-    signals=LiveSignals(source).start()
+    signals=LiveSignals(source).start() if offset is None else None
     try:
         with (folder / 'capture.log').open('w', encoding='utf-8') as log:
             subprocess.run(command, stdout=subprocess.DEVNULL, stderr=log, check=True, timeout=seconds+90)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         raise RuntimeError('Live capture failed or timed out; inspect its private capture.log') from None
     finally:
-        save(folder/'chat-signals.json',signals.close())
+        if signals:
+            save(folder/'chat-signals.json',signals.close())
+        else:
+            events=[]
+            if signal['method']=='replay_chat_peak':
+                events=[{'capture_offset':signal['end']-offset,'unique_chatters':signal['unique_chatters'],'baseline':1}]
+            save(folder/'chat-signals.json',{'spikes':events,'method':signal['method']})
     return output
 
 
@@ -150,20 +198,20 @@ def youtube():
     return yt
 
 
-def publish(video, metadata, source, state):
+def publish(video, metadata, source, state, destinations=None, privacy='public', manual=False):
     from googleapiclient.http import MediaFileUpload
     if not source_allowed(source):
         raise RuntimeError('Game schedule switched during processing; old-game upload refused')
-    if not read(ROOT/'scheduler.json',{}).get('enabled'):
+    if not manual and not read(ROOT/'scheduler.json',{}).get('enabled'):
         raise RuntimeError('Automatic posting was paused during processing')
     if any(row['status'] in ('pending','uncertain') for row in state.get('uploads',[])):
         raise RuntimeError('Unresolved upload; publishing held to prevent duplicates')
     config=read(ROOT/'scheduler.json',{})
-    if time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
+    if not manual and time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
         raise RuntimeError('Upload window has not opened')
     digest=hashlib.sha256(video.read_bytes()).hexdigest()
-    if any(row.get('sha256')==digest and row['status']=='uploaded' for row in state.get('uploads',[])):
-        raise RuntimeError('This exact finished clip has already been uploaded')
+    if any(row.get('sha256')==digest and row['status'] in ('uploaded','pending','uncertain','quarantined') for row in state.get('uploads',[])):
+        raise RuntimeError('This exact clip is already uploaded or quarantined; choose another clip')
     yt = youtube()  # Verify before creating any remote video.
     progress(state,'uploading','Uploading the finished clip to verified Shotsnip')
     operation = uuid.uuid4().hex
@@ -175,15 +223,25 @@ def publish(video, metadata, source, state):
     try:
         result = yt.videos().insert(part='snippet,status', body={
             'snippet':{'title':metadata['title'][:100], 'description':metadata['description']+'\n\n'+marker,
-                'categoryId':'20', 'tags':['GTA' if source['game']=='gta' else 'GTA6' if source['game']=='gta6' else 'GTA5','Shorts','Shotsnip']},
-            'status':{'privacyStatus':'public','selfDeclaredMadeForKids':False}},
+                'categoryId':'20', 'tags':['Gaming' if source.get('manual') else 'GTA' if source['game']=='gta' else 'GTA6' if source['game']=='gta6' else 'GTA5','Shorts','Shotsnip']},
+            'status':{'privacyStatus':privacy,'selfDeclaredMadeForKids':False}},
             media_body=MediaFileUpload(str(video),mimetype='video/mp4',resumable=True)).execute(num_retries=0)
-    except Exception:
-        record['status']='uncertain'
+    except Exception as exc:
+        from googleapiclient.errors import HttpError
+        rejected=isinstance(exc,HttpError) and 400<=exc.resp.status<500 and exc.resp.status!=408
+        record['status']='rejected' if rejected else 'uncertain'
+        if rejected:
+            try:
+                error=json.loads(exc.content)['error']
+                record['rejection_reason']=error.get('errors',[{}])[0].get('reason','http_'+str(exc.resp.status))
+            except (ValueError,KeyError,IndexError):
+                record['rejection_reason']='http_'+str(exc.resp.status)
         save(WORK/'state.json', state)
+        if rejected:
+            raise RuntimeError('YouTube rejected upload: '+record['rejection_reason']) from None
         raise RuntimeError('Upload response uncertain. Publishing held to prevent duplicates; reconcile channel uploads.') from None
     record.update(status='uploaded',video_id=result['id'],finished_at=now(),
-        requested_privacy='public',returned_privacy=result.get('status',{}).get('privacyStatus'))
+        requested_privacy=privacy,returned_privacy=result.get('status',{}).get('privacyStatus'))
     state['last_upload_at']=time.time()
     save(WORK/'state.json', state)
     latest=read(ROOT/'scheduler.json',{})
@@ -197,7 +255,8 @@ def publish(video, metadata, source, state):
     metadata.update(uploaded=True,uploaded_video_id=result['id'],published_at=now())
     save(video.parent/'metadata.json', metadata)
     import facebook_shotsnip as fb  # best-effort FB Page cross-post; never reverses the YT publish
-    fb.crosspost(record, video, metadata.get('title',''), metadata.get('description',''), ROOT)
+    if destinations is None or 'facebook' in destinations:
+        fb.crosspost(record, video, metadata.get('title',''), metadata.get('description',''), ROOT)
     save(WORK/'state.json', state)
     progress(state,'published','Clip published; waiting for the next posting window')
     return record
@@ -237,6 +296,9 @@ def attempt_tick(scan_only=False):
         retry=state.pop('retry_pending',False)
         try:
             config=read(ROOT/'scheduler.json',{})
+            import manual_jobs
+            if manual_jobs.pending(ROOT):
+                return {'status':'manual_job_queued'}
             from clip_efficiency import cleanup
             save(ROOT/'work/dashboard/cleanup.json',cleanup(ROOT,config.get('raw_retention_days',3),'D:/Clips-Kitty'))
             if not config.get('enabled',False):
@@ -265,6 +327,12 @@ def attempt_tick(scan_only=False):
                              streams=rows,discovery_errors=errors,selected=chosen,status='scanned')
                 save(WORK/'state.json',state)
             chosen=choose_varied(state.get('streams',[]),state,config.get('streamer_cooldown_hours',6))
+            if not chosen and not scan_only:
+                progress(state,'scanning','No suitable live source; checking yesterday\'s stream replays by views')
+                from archive_streams import discover_yesterday
+                replays=discover_yesterday()
+                state['replay_candidates']=replays
+                chosen=choose_varied(replays,state,config.get('streamer_cooldown_hours',6))
             state['selected']=chosen
             save(WORK/'state.json',state)
             if scan_only or not chosen:
@@ -285,8 +353,10 @@ def attempt_tick(scan_only=False):
             state['capture_history']=state['capture_history'][-100:]
             progress(state,'capturing',f"Capturing {config.get('capture_seconds',180)} seconds from {chosen['channel']}")
             video=capture(chosen,folder,config.get('capture_seconds',180))
+            stop_after_stage()
             progress(state,'analyzing','Clips Kitty is finding and scoring highlights')
             selected=kitty_select(chosen,video,state)
+            stop_after_stage()
             if not selected:
                 if combined:
                     fallback=publish_ready(state,config)
@@ -346,6 +416,11 @@ def attempt_tick(scan_only=False):
                 raise RuntimeError('Schedule changed during editing; old-game clip will not be uploaded')
             metadata=read(finished.parent/'metadata.json',{})
             save(folder/'selection.json',selected)
+            stop_after_stage()
+            if not read(ROOT/'scheduler.json',{}).get('enabled'):
+                state.setdefault('ready_clips',[]).append({'file':str(finished),'source':chosen,'title':metadata['title'],'ready_at':time.time()})
+                progress(state,'ready','Automatic publishing paused; finished clip saved in reserve')
+                return {'status':'ready'}
             if combined:
                 return publish(finished,metadata,chosen,state)
             state.setdefault('ready_clips',[]).append({'file':str(finished),'source':chosen,
@@ -354,6 +429,9 @@ def attempt_tick(scan_only=False):
             progress(state,'queued','Finished clip ready; waiting for its posting window')
             result=publish_ready(state,config)
             return result or {'status':'queued','ready_clips':len(state['ready_clips'])}
+        except StopRequested:
+            progress(state,'waiting','Stopped after the completed stage; hourly automation remains configured')
+            return {'status':'cancelled'}
         except Exception as exc:
             state['failed_phase']=state.get('phase')
             state.update(status='error',error=str(exc),failed_at=now())
