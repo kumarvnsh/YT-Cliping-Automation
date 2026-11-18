@@ -47,16 +47,27 @@ def cleanup(root,days=3,kitty_root=None):
 
 
 def checkpoints(snapshots):
-    """Nearest real observation within tolerance; never interpolate an age."""
+    """Nearest real observation within tolerance; never interpolate an age.
+
+    The 1h tolerance must exceed half the ~30 minute refresh cadence, otherwise a
+    slightly late refresh lets the whole window fall between two observations.
+    A publish time seen in any snapshot is reused for snapshots where the
+    per-video detail lookup failed, so their real view counts still count."""
+    published={}
+    for snapshot in snapshots:
+        for video in snapshot.get('videos',[]):
+            if video.get('id') and video.get('published_at'):
+                published.setdefault(video['id'],video['published_at'])
     videos={}
     for snapshot in snapshots:
         observed=datetime.fromisoformat(snapshot['checked_at']).timestamp()
         for video in snapshot.get('videos',[]):
-            if not video.get('published_at') or video.get('views') is None: continue
-            age=(observed-datetime.fromisoformat(video['published_at'].replace('Z','+00:00')).timestamp())/3600
+            published_at=video.get('published_at') or published.get(video.get('id'))
+            if not published_at or video.get('views') is None: continue
+            age=(observed-datetime.fromisoformat(published_at.replace('Z','+00:00')).timestamp())/3600
             if age<0: continue
             row=videos.setdefault(video['id'],{'id':video['id'],'title':video.get('title'),'checkpoints':{}})
-            for hour,tolerance in [(1,.25),(6,.5),(24,1)]:
+            for hour,tolerance in [(1,.5),(6,.5),(24,1)]:
                 key=str(hour); previous=row['checkpoints'].get(key)
                 if abs(age-hour)<=tolerance and (previous is None or abs(age-hour)<abs(previous['age_hours']-hour)):
                     row['checkpoints'][key]={'views':video['views'],'age_hours':round(age,4),
