@@ -4,6 +4,31 @@ import manual_worker as worker
 import finish_video
 
 
+def test_auto_source_inspection_failure_tries_another_creator(tmp_path,monkeypatch):
+    monkeypatch.setattr(jobs,'ROOT',tmp_path)
+    monkeypatch.setattr(worker.w,'ROOT',tmp_path)
+    monkeypatch.setattr(worker.w,'WORK',tmp_path/'work/scheduler')
+    identity=jobs.enqueue({'mode':'auto'})[0]
+    sources=[dict(id='abcdefghijk',url='https://youtu.be/abcdefghijk',channel='A'),
+             dict(id='lmnopqrstuv',url='https://youtu.be/lmnopqrstuv',channel='B')]
+    monkeypatch.setattr(worker.w,'scan',lambda:(sources,[]))
+    monkeypatch.setattr(worker.w,'choose_varied',lambda rows,state: next((s for s in rows if s['id'] not in
+        {x['source']['id'] for x in state.get('capture_history',[])}),None))
+    inspected=[]
+    def inspect(url):
+        inspected.append(url)
+        if len(inspected)==1: raise worker.yt_dlp.utils.DownloadError('source offline')
+        return {'id':'lmnopqrstuv'}
+    monkeypatch.setattr(worker,'inspect',inspect)
+    def capture(*args): raise worker.Cancelled()
+    monkeypatch.setattr(worker.w,'capture',capture)
+    import pytest
+    with pytest.raises(worker.Cancelled): worker.process(jobs.claim())
+    assert len(inspected)==2
+    assert jobs.get(identity)['result']['source']['channel']=='B'
+    assert 'source offline' in (tmp_path/'work/manual'/identity/'source-inspection.log').read_text()
+
+
 def test_exact_preview_finishes_without_publishing(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, 'ROOT', tmp_path)
     monkeypatch.setattr(worker.w, 'ROOT', tmp_path)
@@ -70,3 +95,15 @@ def test_manual_clip_waits_for_shared_six_hour_window(tmp_path,monkeypatch):
 def test_facebook_delivery_repair_does_not_wait_for_new_clip_window():
     job={'options':{'platforms':['facebook']},'result':{'publication':{'youtube_id':'already-published'}}}
     assert not worker.defer_publication(job,{'last_upload_at':worker.time.time()})
+
+
+def test_source_failure_keeps_schedule_active_but_uncertain_upload_stays_blocked(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker.w,'WORK',tmp_path)
+    state={'uploads':[],'last_upload_at':123,'error':'old'}
+    worker.report_failure(state,'manual','Source unavailable',False)
+    assert state['phase']=='waiting' and 'error' not in state
+    assert state['last_upload_at']==123
+    assert state['last_manual_failure']['error']=='Source unavailable'
+    state['uploads']=[{'status':'uncertain'}]
+    worker.report_failure(state,'manual','Check publication',False)
+    assert state['phase']=='error'

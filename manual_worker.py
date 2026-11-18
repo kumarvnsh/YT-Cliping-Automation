@@ -23,6 +23,29 @@ def inspect(url):
     return info
 
 
+def inspect_logged(url,folder):
+    try:
+        return inspect(url)
+    except Exception as exc:
+        # Private local diagnostics; public job status never exposes signed URLs.
+        with (folder/'source-inspection.log').open('a',encoding='utf-8') as log:
+            log.write(type(exc).__name__+': '+str(exc)+'\n')
+        raise
+
+
+def report_failure(state,identity,message,publishing):
+    state['last_manual_failure']={'job_id':identity,'at':w.now(),'error':message}
+    # A failed preview/source request must not label the independent timed
+    # worker as blocked. Keep uncertain publication outcomes visibly blocked.
+    held=any(row.get('status') in ('pending','uncertain','facebook_pending','facebook_uncertain')
+             for row in state.get('uploads',[]))
+    if publishing or held:
+        w.progress(state,'error',message)
+    else:
+        state.pop('error',None)
+        w.progress(state,'waiting','Manual request failed; details in its job card. Automatic clipping remains scheduled.')
+
+
 def exact_download(source,info,folder,window):
     start,end=window
     if info.get('duration') and info.get('live_status')!='is_live' and end>info['duration']:
@@ -111,15 +134,28 @@ def process(job):
         return
     stage('scanning','Preparing manual clip source')
     if options['mode']=='auto':
-        rows,_=w.scan(); source=w.choose_varied(rows,state)
-        if not source:
-            from archive_streams import discover_yesterday
-            source=w.choose_varied(discover_yesterday(),state)
-        if not source: raise RuntimeError('No eligible live stream or yesterday replay is available')
-        source={**source,'manual':True}
-        info=inspect(source['url'])
+        rows,_=w.scan()
+        for attempt in range(3):
+            source=w.choose_varied(rows,state)
+            if not source:
+                from archive_streams import discover_recent
+                rows=discover_recent(hours=w.read(w.ROOT/'scheduler.json',{}).get('replay_lookback_hours',8))
+                source=w.choose_varied(rows,state)
+            if not source: raise RuntimeError('No eligible live stream or replay from the last eight hours is available')
+            source={**source,'manual':True}
+            state['selected']=source
+            jobs.update(identity,result={'source':source})
+            w.save(folder/'source.json',source)
+            try:
+                info=inspect_logged(source['url'],folder)
+                break
+            except yt_dlp.utils.DownloadError:
+                state.setdefault('capture_history',[]).append({'at':time.time(),'source':source})
+                state['capture_history']=state['capture_history'][-100:]
+                w.save(w.WORK/'state.json',state)
+                if attempt==2: raise RuntimeError('Three automatic sources were unavailable; see the private source-inspection.log') from None
     else:
-        info=inspect(options['url'])
+        info=inspect_logged(options['url'],folder)
         live=info.get('live_status')=='is_live'
         if options['mode']=='live' and not live: raise ValueError('This source is not live; choose replay or exact timestamps')
         if options['mode']=='replay' and live: raise ValueError('This source is live; choose live mode or an exact DVR interval')
@@ -197,7 +233,7 @@ def run():
                 message=str(exc) if isinstance(exc,(RuntimeError,ValueError)) else type(exc).__name__+'; inspect the local job log'
                 jobs.update(job['id'],status='attention' if publishing else 'failed',stage='attention' if publishing else 'failed',
                     error=message,note='Publishing needs review' if publishing else 'Processing failed; retry or edit the request')
-                state=w.read(w.WORK/'state.json',{}); w.progress(state,'error',message)
+                state=w.read(w.WORK/'state.json',{}); report_failure(state,job['id'],message,publishing)
         finally:
             lock.seek(0); msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
 

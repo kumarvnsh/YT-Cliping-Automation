@@ -96,10 +96,14 @@ def choose_varied(rows, state, cooldown_hours=6):
         except (ValueError,KeyError):
             continue
     used_replays={item.get('source',{}).get('id') for item in state.get('uploads',[])}
-    used_replays.update(item.get('source',{}).get('id') for item in state.get('capture_history',[]))
+    # An unsuccessful LIVE attempt does not mean the later replay was used.
+    # Replay attempts themselves remain excluded, alongside all upload records.
+    used_replays.update(item.get('source',{}).get('id') for item in state.get('capture_history',[])
+                        if item.get('source',{}).get('archive'))
     eligible=[row for row in rows if key(row) not in blocked and not (row.get('archive') and row['id'] in used_replays)]
     targets=[row for row in eligible if row.get('targeted')]
-    return choose(targets or eligible)
+    missed=[row for row in targets if row.get('archive') and row.get('recent_replay')]
+    return choose(missed or targets or eligible)
 
 
 def scan():

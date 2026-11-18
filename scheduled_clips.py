@@ -13,7 +13,7 @@ import uuid
 import requests
 from game_schedule import active_game, title_matches, IST
 from live_clipper import ffmpeg, resolve
-from stream_sources import scan, choose, choose_varied, any_gta
+from stream_sources import scan as scan_live, choose, choose_varied, any_gta
 
 ROOT = Path(__file__).resolve().parent
 WORK = ROOT / 'work' / 'scheduler'
@@ -21,6 +21,16 @@ KITTY = 'http://127.0.0.1:8765'
 
 
 class StopRequested(Exception): pass
+
+
+def scan():
+    """Add recent missed target broadcasts to the regular discovery pool."""
+    from archive_streams import discover_recent
+    hours=read(ROOT/'scheduler.json',{}).get('replay_lookback_hours',8)
+    rows,errors=scan_live()
+    try:rows+=discover_recent(hours=hours,targets_only=True)
+    except Exception as exc:errors.append('Recent target replays: '+type(exc).__name__)
+    return rows,errors
 
 
 def stop_after_stage():
@@ -126,7 +136,8 @@ def capture(source, folder, seconds=180):
         with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'socket_timeout':20,
             'format':('best[height<=720]/best' if source['platform']=='twitch' else 'bestvideo[height<=720]+bestaudio/best[height<=720]')}) as y:
             info=y.extract_info(source['url'],download=False)
-        if info.get('live_status') not in ('was_live','post_live') and not source.get('manual'):
+        twitch_vod=source['platform']=='twitch' and not info.get('is_live') and (info.get('duration') or 0)>=300
+        if info.get('live_status') not in ('was_live','post_live') and not twitch_vod and not source.get('manual'):
             raise RuntimeError('Replay is no longer a completed public stream')
         from archive_streams import replay_window
         offset,signal=replay_window(info,folder,seconds)
@@ -158,7 +169,7 @@ def capture(source, folder, seconds=180):
             save(folder/'chat-signals.json',signals.close())
         else:
             events=[]
-            if signal['method']=='replay_chat_peak':
+            if signal.get('unique_chatters'):
                 events=[{'capture_offset':signal['end']-offset,'unique_chatters':signal['unique_chatters'],'baseline':1}]
             save(folder/'chat-signals.json',{'spikes':events,'method':signal['method']})
     return output
@@ -353,9 +364,9 @@ def attempt_tick(scan_only=False):
                 save(WORK/'state.json',state)
             chosen=choose_varied(state.get('streams',[]),state,config.get('streamer_cooldown_hours',6))
             if not chosen and not scan_only:
-                progress(state,'scanning','No suitable live source; checking yesterday\'s stream replays by views')
-                from archive_streams import discover_yesterday
-                replays=discover_yesterday()
+                progress(state,'scanning','Checking other public stream replays from the last eight hours')
+                from archive_streams import discover_recent
+                replays=discover_recent(hours=config.get('replay_lookback_hours',8))
                 state['replay_candidates']=replays
                 chosen=choose_varied(replays,state,config.get('streamer_cooldown_hours',6))
             state['selected']=chosen

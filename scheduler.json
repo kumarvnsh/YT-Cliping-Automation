@@ -9,5 +9,6 @@
   "streamer_cooldown_hours": 6,
   "early_publish_minutes": 0,
   "mode": "scan_capture_upload",
-  "raw_retention_days": 3
+  "raw_retention_days": 3,
+  "replay_lookback_hours": 8
 }
