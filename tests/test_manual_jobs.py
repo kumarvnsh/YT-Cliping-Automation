@@ -43,3 +43,16 @@ def test_cancel_and_restart_recovery(tmp_path):
     assert jobs.get(other,tmp_path)['status']=='failed'
     jobs.control(other,'retry',tmp_path)
     assert jobs.get(other,tmp_path)['status']=='queued'
+
+
+def test_prioritize_moves_a_waiting_job_to_the_front(tmp_path):
+    first=jobs.enqueue({'mode':'auto'},tmp_path)[0]
+    second=jobs.enqueue({'mode':'auto'},tmp_path)[0]
+    third=jobs.enqueue({'mode':'auto'},tmp_path)[0]
+    jobs.control(third,'prioritize',tmp_path)
+    assert jobs.claim(tmp_path)['id']==third
+    assert jobs.claim(tmp_path)['id']==first
+    with pytest.raises(ValueError,match='waiting job'):
+        jobs.control(third,'prioritize',tmp_path)  # already running
+    jobs.control(second,'prioritize',tmp_path)  # already first; no change
+    assert jobs.claim(tmp_path)['id']==second

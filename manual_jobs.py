@@ -156,4 +156,11 @@ def control(identity,action,root=None):
             raise ValueError('Facebook outcome must be a confirmed rejection before retrying it')
         options={**job['options'],'platforms':['facebook']}
         update(identity,root,options=options,status='queued_publish',stage='queued',cancel=0,error=None)
+    elif action=='prioritize':
+        # Claim order is creation time, so moving to the front means sorting before every queued job.
+        if job['status'] not in ('queued','queued_publish'): raise ValueError('Only a waiting job can move to the front')
+        with connection(root) as db:
+            first=db.execute("SELECT MIN(created) FROM jobs WHERE status IN ('queued','queued_publish')").fetchone()[0]
+            if first is not None and first<job['created']:
+                db.execute('UPDATE jobs SET created=?,updated=? WHERE id=?',(first-1,time.time(),identity))
     else: raise ValueError('Unknown job control')
