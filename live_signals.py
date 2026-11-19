@@ -52,10 +52,21 @@ class LiveSignals:
                         elif ' PRIVMSG ' in line:
                             add(line.split('!',1)[0])
             else:
-                from youtube_live_chat import YouTubeChat
-                chat=YouTubeChat(self.source['id']); seen=set()
+                from youtube_live_chat import YouTubeChat,transient
+                chat=YouTubeChat(self.source['id']); seen=set(); failures=0
                 while not self.stop.is_set():
-                    for message in chat.get():
+                    try:
+                        batch=chat.get(); failures=0
+                    except Exception as exc:
+                        # One timeout or 503 should not end chat signals for the whole capture.
+                        failures+=1
+                        if not transient(exc) or failures>=5:
+                            raise
+                        self.error=type(exc).__name__
+                        self.stop.wait(min(30,2**failures))
+                        continue
+                    self.error=None
+                    for message in batch:
                         if message['id'] not in seen and abs(time.time()-message['timestamp'])<20:
                             seen.add(message['id']); add(message['author'])
                     if len(seen)>20000:

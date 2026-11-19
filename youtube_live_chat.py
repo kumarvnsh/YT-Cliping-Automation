@@ -27,6 +27,14 @@ def continuation(renderer):
     raise ValueError('Live chat continuation missing; chat may have ended or be disabled')
 
 
+def transient(exc):
+    """True for brief network or server hiccups worth retrying (timeouts, 429, 5xx)."""
+    if isinstance(exc, requests.HTTPError):
+        status = getattr(exc.response, 'status_code', None)
+        return status == 429 or (status is not None and status >= 500)
+    return isinstance(exc, (requests.Timeout, requests.ConnectionError))
+
+
 def messages(renderer):
     """Yield only ordinary text messages; no viewer identities are logged."""
     for action in renderer.get('actions', []):
