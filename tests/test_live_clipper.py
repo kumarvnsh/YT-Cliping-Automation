@@ -70,6 +70,22 @@ def test_segment_listing_retries_while_ffmpeg_locks_it(tmp_path, monkeypatch):
     monkeypatch.setattr(live_clipper.time, 'sleep', lambda _: None)
     assert live_clipper.completed_segments(tmp_path) == [(tmp_path / 'segment-000000.ts', 0.0, 2.0)]
 
+def test_render_uses_given_segments_without_rereading_locked_listing(tmp_path, monkeypatch):
+    import live_clipper
+    segments = [(tmp_path / 'segment-000000.ts', 0.0, 40.0)]
+    def locked(_folder):
+        raise PermissionError(13, 'Permission denied', str(tmp_path / 'segments.csv'))
+    monkeypatch.setattr(live_clipper, 'completed_segments', locked)
+    sentinel = RuntimeError('reached ffmpeg')
+    def fake_run(*args, **kwargs):
+        raise sentinel
+    monkeypatch.setattr(live_clipper.subprocess, 'run', fake_run)
+    monkeypatch.setattr(live_clipper, 'ffmpeg', lambda: 'ffmpeg')
+    with pytest.raises(RuntimeError) as caught:
+        live_clipper.render(tmp_path, 35.0, 30, 'chat-spike', segments)
+    assert caught.value is sentinel
+
+
 def test_source_resolution_preference_is_bounded():
     from live_clipper import capture_format
     assert 'height<=1080' in capture_format('https://www.youtube.com/watch?v=abcdefghijk',2160)

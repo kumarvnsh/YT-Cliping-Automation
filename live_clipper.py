@@ -130,8 +130,12 @@ def select_segments(segments, end, duration):
     return selected, start - selected[0][1]
 
 
-def render(folder, end, duration, label):
-    selected, offset = select_segments(completed_segments(folder), end, duration)
+def render(folder, end, duration, label, segments=None):
+    # Reuse the listing the capture loop already read: re-reading it here can hit
+    # ffmpeg's Windows file lock and abort the whole capture with PermissionError.
+    if segments is None:
+        segments = completed_segments(folder)
+    selected, offset = select_segments(segments, end, duration)
     output = folder / f'clip-{label}-{int(end)}.mp4'
     concat = folder / 'concat.txt'
     concat.write_text(''.join(f"file '{p.name}'\n" for p, _, _ in selected), encoding='utf-8')
@@ -276,7 +280,7 @@ def monitor(url, seconds=180, test_clip_after=None, duration=30, reaction_delay=
                         continue
                     end = segments[-1][2] - reaction_delay
                     try:
-                        output = render(folder, end, duration, label)
+                        output = render(folder, end, duration, label, segments)
                         record = {'path': str(output), 'trigger': label, 'event': event,
                                   'media_end': end, 'duration_requested': duration}
                         summary['clips'].append(record)
