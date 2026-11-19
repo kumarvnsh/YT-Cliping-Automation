@@ -68,3 +68,26 @@ def test_missing_word_times_do_not_crash_cached_slicing():
     from clip_efficiency import slice_transcript
     assert slice_transcript({'language':'hi','segments':[{'words':None}]},0,30)['segments']==[]
     assert slice_transcript({'segments':None},0,30)['segments']==[]
+
+def test_missing_speech_needs_explicit_reviewed_action_override(monkeypatch):
+    import pytest
+    import finish_video as f
+    with pytest.raises(ValueError,match='No speech'):f.check_caption_evidence({'segments':[]},'clip')
+
+
+def test_reviewed_action_with_sound_does_not_get_invented_captions(monkeypatch):
+    from types import SimpleNamespace as N
+    import finish_video as f
+    monkeypatch.setattr(f.subprocess,'run',lambda *a,**kw:N(returncode=0,stderr='max_volume: -5.0 dB'))
+    transcript={'segments':[]}
+    f.check_caption_evidence(transcript,'clip',True)
+    assert transcript['segments']==[]
+    assert transcript['review_status']=='speech_not_recognized_no_generated_captions'
+
+
+def test_reviewed_action_still_rejects_muted_source(monkeypatch):
+    import pytest
+    from types import SimpleNamespace as N
+    import finish_video as f
+    monkeypatch.setattr(f.subprocess,'run',lambda *a,**kw:N(returncode=0,stderr='max_volume: -91.0 dB'))
+    with pytest.raises(ValueError,match='No audible'):f.check_caption_evidence({'segments':[]},'clip',True)

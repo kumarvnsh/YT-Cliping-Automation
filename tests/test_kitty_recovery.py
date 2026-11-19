@@ -81,3 +81,16 @@ def test_state_write_keeps_backup_and_refuses_incomplete_ledger(tmp_path,monkeyp
     with pytest.raises(RuntimeError,match='incomplete state'):
         worker.save(path,{'phase':'error'})
     assert worker.read(path,{})['uploads']==original['uploads']
+
+def test_gta_requests_gameplay_scoring(tmp_path,monkeypatch):
+    payloads=[]
+    def api(path,payload=None):
+        if path=='/health/preflight':return {'checks':[]}
+        if path=='/videos/local':payloads.append(payload);return {'job_id':1}
+        if path=='/queue/resume':return {}
+        if path=='/jobs/1':return {'status':'done','video_id':'local_abc'}
+        return [{'end_s':60,'score':70}]
+    monkeypatch.setattr(worker,'api',api)
+    worker.kitty_select({'title':'GTA','channel':'Creator','game':'gta'},tmp_path/'capture.mp4')
+    assert payloads[0]['gaming_scoring'] is True
+    assert 'ANY wanted level' in payloads[0]['focus']

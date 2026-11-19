@@ -1,6 +1,6 @@
 {
-  "name": "Gaming Short v3 - clean adaptive split",
-  "version": 3,
+  "name": "Gaming Short v4 - clear camera and gameplay",
+  "version": 4,
   "styles_file": "gaming-short-v1.ass",
   "width": 1080,
   "height": 1920,
@@ -46,13 +46,14 @@
     "saturation": 0.55,
     "darken": 0.4
   },
-  "reference_video": "work/previews/split-screen-sample/shotsnip-clean-split-sample.mp4",
+  "reference_video": "work/previews/camera-quality-v4/normal/finished-short.mp4",
   "layout": "clean_split",
   "captions_only": true,
-  "camera_height": 640,
+  "camera_height": 480,
   "music": {
     "enabled": false,
     "volume": 0.1,
     "track": "original-gaming-beat-v1"
-  }
+  },
+  "max_camera_upscale": 4
 }

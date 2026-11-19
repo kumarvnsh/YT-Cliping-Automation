@@ -12,7 +12,7 @@ import time
 import uuid
 import requests
 from game_schedule import active_game, title_matches, IST
-from live_clipper import ffmpeg, resolve
+from live_clipper import capture_format,ffmpeg, resolve
 from stream_sources import scan as scan_live, choose, choose_varied, any_gta
 
 ROOT = Path(__file__).resolve().parent
@@ -131,10 +131,11 @@ def capture(source, folder, seconds=180):
     """Bounded public media capture; Twitch uses an anonymous playback token."""
     if shutil.disk_usage(folder).free<3*1024**3:
         raise RuntimeError('Less than 3 GB free; capture paused')
+    height=read(ROOT/'scheduler.json',{}).get('capture_max_height',1080)
     if source.get('archive'):
         import yt_dlp
         with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'socket_timeout':20,
-            'format':('best[height<=720]/best' if source['platform']=='twitch' else 'bestvideo[height<=720]+bestaudio/best[height<=720]')}) as y:
+            'format':capture_format(source['url'],height)}) as y:
             info=y.extract_info(source['url'],download=False)
         twitch_vod=source['platform']=='twitch' and not info.get('is_live') and (info.get('duration') or 0)>=300
         if info.get('live_status') not in ('was_live','post_live') and not twitch_vod and not source.get('manual'):
@@ -143,7 +144,7 @@ def capture(source, folder, seconds=180):
         offset,signal=replay_window(info,folder,seconds)
         save(folder/'replay-signal.json',{'offset':offset,**signal})
     else:
-        info = resolve(source['url'])
+        info = resolve(source['url'],max_height=height)
         offset=None
     if not source.get('manual') and source['platform']=='youtube' and not (any_gta(info.get('title')) if source.get('targeted') else title_matches(info.get('title'),source['game'])):
         raise RuntimeError('Live source title changed game since discovery; capture refused')
@@ -180,9 +181,10 @@ def kitty_select(source, video, state=None):
     blockers = [c for c in preflight.get('checks', []) if c.get('blocking') and not c.get('ok')]
     if blockers:
         raise RuntimeError('Clips Kitty preflight: ' + '; '.join(c['name'] for c in blockers))
+    from gta_moments import FOCUS
     job = api('/videos/local', {'path':str(video), 'title':source['title'],
         'channel':source['channel'], 'max_clips':1, 'min_score':55, 'captions':False,
-        'focus':'A funny or surprising GTA gameplay moment with a clear payoff. Avoid loading screens and dead air.'})
+        'focus':FOCUS,'gaming_scoring':source.get('game') in ('gta','gta5','gta6')})
     job_id = job.get('job_id', job.get('id'))
     save(video.parent/'kitty-job.json',job)
     if job_id is None:
@@ -232,7 +234,7 @@ def youtube():
     return yt
 
 
-def publish(video, metadata, source, state, destinations=None, privacy='public', manual=False):
+def publish(video, metadata, source, state, destinations=None, privacy='public', manual=False, run_now=False):
     from googleapiclient.http import MediaFileUpload
     if not source_allowed(source):
         raise RuntimeError('Game schedule switched during processing; old-game upload refused')
@@ -241,14 +243,18 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
     if any(row['status'] in ('pending','uncertain') for row in state.get('uploads',[])):
         raise RuntimeError('Unresolved upload; publishing held to prevent duplicates')
     config=read(ROOT/'scheduler.json',{})
-    if time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
+    from gta_moments import approved
+    if not manual and config.get('require_gta_moment_review') and not approved(metadata.get('gta_moment_review')):
+        raise RuntimeError('Automatic clip has not passed the requested GTA moment review')
+    if not run_now and time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
         raise RuntimeError('Upload window has not opened')
     digest=hashlib.sha256(video.read_bytes()).hexdigest()
     if any(row.get('sha256')==digest and row['status'] in ('uploaded','pending','uncertain','quarantined') for row in state.get('uploads',[])):
         raise RuntimeError('This exact clip is already uploaded or quarantined; choose another clip')
     yt = youtube()  # Verify before creating any remote video.
     from clip_titles import upload_title
-    metadata['title']=upload_title(source,metadata.get('title') or metadata.get('hook'),metadata.get('creator'))
+    if not metadata.get('commentary'):
+        metadata['title']=upload_title(source,metadata.get('title') or metadata.get('hook'),metadata.get('creator'))
     progress(state,'uploading','Uploading the finished clip to verified Shotsnip')
     operation = uuid.uuid4().hex
     marker = 'Shotsnip capture ' + operation
@@ -299,13 +305,15 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
 
 
 def publish_ready(state, config):
+    from gta_moments import approved
     queue=state.get('ready_clips',[])
     keep=[]
     for item in queue:
         if any(row.get('status')=='uploaded' and Path(row.get('file','')).resolve()==Path(item['file']).resolve()
                for row in state.get('uploads',[])):
             continue
-        if source_allowed(item['source']) and datetime.fromtimestamp(item['ready_at'],IST).date()==datetime.fromtimestamp(time.time(),IST).date() and Path(item['file']).is_file():
+        reviewed=not config.get('require_gta_moment_review') or approved(read(Path(item['file']).parent/'metadata.json',{}).get('gta_moment_review'))
+        if reviewed and source_allowed(item['source']) and datetime.fromtimestamp(item['ready_at'],IST).date()==datetime.fromtimestamp(time.time(),IST).date() and Path(item['file']).is_file():
             keep.append(item)
     state['ready_clips']=keep
     save(WORK/'state.json',state)
@@ -318,7 +326,7 @@ def publish_ready(state, config):
     return result
 
 
-def attempt_tick(scan_only=False):
+def attempt_tick(scan_only=False,run_now=False):
     WORK.mkdir(parents=True,exist_ok=True)
     with (WORK/'worker.lock').open('a+b') as lock:
         if lock.tell()==0:
@@ -345,7 +353,7 @@ def attempt_tick(scan_only=False):
             combined=config.get('mode')=='scan_capture_upload'
             if combined:
                 base=max(state.get('last_cycle_at',0),state.get('last_upload_at',0))
-                if not retry and time.time()-base<config.get('scan_minutes',90)*60 and state.get('game',active_game())==active_game():
+                if not run_now and not retry and time.time()-base<config.get('scan_minutes',90)*60 and state.get('game',active_game())==active_game():
                     return {'status':'cycle_not_due'}
                 state['last_cycle_at']=time.time(); save(WORK/'state.json',state)
             if not scan_only and not combined:
@@ -380,6 +388,9 @@ def attempt_tick(scan_only=False):
                 progress(state,'queued','Ready-clip queue is full; waiting for the posting window')
                 return {'status':'queue_full'}
             # An unavailable editor must not waste capture or post an arbitrary interval.
+            if config.get('require_gta_moment_review'):
+                from gta_moments import preflight
+                preflight()
             ensure_kitty()
             api('/health/preflight')
             folder=WORK/(datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+chosen['id'])
@@ -444,13 +455,40 @@ def attempt_tick(scan_only=False):
                 if sliced['segments']:
                     cached=folder/'cached-transcript.json'; save(cached,sliced)
             hook=usable_hook({} if spikes else selected,chosen)
-            if spikes:
+            moment_review=None
+            if config.get('require_gta_moment_review'):
+                from gta_moments import review
+                progress(state,'analyzing','Checking the footage for a clear GTA action, discovery or funny gameplay moment')
+                moment_review=review(cached,video=raw)
+                save(folder/'gta-moment-review.json',moment_review)
+                if not moment_review['accepted']:
+                    progress(state,'waiting','No clearly supported GTA gameplay peak; trying another source')
+                    return {'status':'no_quality_clip','reason':moment_review['reason']}
+                hook=moment_review.get('hook') or hook
+            if spikes and not moment_review:
                 hook=chosen['channel']+' | GTA live reaction'
             finished=finish(raw,hook,chosen['channel'],transcript_file=cached,source_url=chosen['url'],
+                allow_no_speech=bool(moment_review and moment_review.get('accepted') is True),
                 category='GTA / LIVE MOMENT' if chosen['game']=='gta' else 'GTA VI / LIVE MOMENT' if chosen['game']=='gta6' else 'GTA V / LIVE MOMENT')
             if not source_allowed(chosen):
                 raise RuntimeError('Schedule changed during editing; old-game clip will not be uploaded')
             metadata=read(finished.parent/'metadata.json',{})
+            if moment_review:
+                metadata['gta_moment_review']=moment_review
+                save(finished.parent/'metadata.json',metadata)
+            if config.get('commentary',{}).get('enabled'):
+                # Reach now favours Shorts that add the uploader's own contribution, so
+                # every automatic clip carries a narrated Shotsnip breakdown.
+                from commentary import CommentaryRejected,narrate
+                progress(state,'finishing','Writing and voicing the Shotsnip breakdown')
+                try:
+                    finished=narrate(finished,metadata,finished.parent/'transcript.json',chosen,
+                        voice=config['commentary'].get('voice','en-US-AndrewMultilingualNeural'),rate=config['commentary'].get('rate','+0%'),
+                        mode=config['commentary'].get('mode','intro'))
+                except CommentaryRejected as exc:
+                    progress(state,'waiting',str(exc))
+                    return {'status':'no_quality_clip','reason':str(exc)}
+                metadata=read(finished.parent/'metadata.json',{})
             save(folder/'selection.json',selected)
             stop_after_stage()
             if not read(ROOT/'scheduler.json',{}).get('enabled'):
@@ -458,7 +496,7 @@ def attempt_tick(scan_only=False):
                 progress(state,'ready','Automatic publishing paused; finished clip saved in reserve')
                 return {'status':'ready'}
             if combined:
-                return publish(finished,metadata,chosen,state)
+                return publish(finished,metadata,chosen,state,run_now=run_now)
             state.setdefault('ready_clips',[]).append({'file':str(finished),'source':chosen,
                 'title':metadata['title'],'ready_at':time.time()})
             state['status']='queued'; state.pop('error',None)
@@ -466,7 +504,7 @@ def attempt_tick(scan_only=False):
             result=publish_ready(state,config)
             return result or {'status':'queued','ready_clips':len(state['ready_clips'])}
         except StopRequested:
-            progress(state,'waiting','Stopped after the completed stage; hourly automation remains configured')
+            progress(state,'waiting','Stopped after the completed stage; automatic clipping remains configured')
             return {'status':'cancelled'}
         except Exception as exc:
             state['failed_phase']=state.get('phase')
@@ -478,11 +516,11 @@ def attempt_tick(scan_only=False):
             lock.seek(0); msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
 
 
-def tick(scan_only=False):
+def tick(scan_only=False,run_now=False):
     for number in range(1,4):
         error=None
         try:
-            result=attempt_tick(scan_only)
+            result=attempt_tick(scan_only,run_now=True) if run_now else attempt_tick(scan_only)
             retry=not scan_only and result.get('status')=='no_quality_clip'
         except Exception as exc:
             error=exc
@@ -502,5 +540,6 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tick',action='store_true')
     parser.add_argument('--scan-only',action='store_true')
+    parser.add_argument('--run-now',action='store_true',help='Explicit one-run cadence override; content, channel and duplicate guards remain active')
     args=parser.parse_args()
-    print(json.dumps(tick(args.scan_only),ensure_ascii=True))
+    print(json.dumps(tick(args.scan_only,args.run_now),ensure_ascii=True))

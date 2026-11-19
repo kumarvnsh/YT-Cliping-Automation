@@ -18,7 +18,7 @@ class Cancelled(Exception): pass
 
 def inspect(url):
     with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'socket_timeout':20,'retries':1,
-        'format':'best[height<=720]/best' if 'twitch.tv/' in url else 'bestvideo[height<=720]+bestaudio/best[height<=720]'}) as y:
+        'format':w.capture_format(url,w.read(w.ROOT/'scheduler.json',{}).get('capture_max_height',1080))}) as y:
         info=y.extract_info(url,download=False)
     return info
 
@@ -54,7 +54,7 @@ def exact_download(source,info,folder,window):
         '--socket-timeout','20','--retries','1','--download-sections',f'*{start}-{end}',
         '--force-keyframes-at-cuts','--merge-output-format','mp4','--remux-video','mp4',
         '--ffmpeg-location','D:/Clips-Kitty/vendor/ffmpeg','-f',
-        'best[height<=720]/best' if source['platform']=='twitch' else 'bestvideo[height<=720]+bestaudio/best[height<=720]',
+        w.capture_format(source['url'],w.read(w.ROOT/'scheduler.json',{}).get('capture_max_height',1080)),
         '-o',str(folder/'original.%(ext)s')]
     if info.get('live_status')=='is_live': command+=['--live-from-start']
     command.append(source['url'])
@@ -168,6 +168,9 @@ def process(job):
     result={'source':source}; jobs.update(identity,result=result)
     w.save(folder/'source.json',source)
     cached=None
+    if options['mode']=='auto' and w.read(w.ROOT/'scheduler.json',{}).get('require_gta_moment_review'):
+        from gta_moments import preflight
+        preflight()
     if options['mode']=='exact':
         stage('capturing','Downloading the requested timestamp interval')
         raw=exact_download(source,info,folder,options['window'])
@@ -191,11 +194,23 @@ def process(job):
             if sliced['segments'] and options['language'] in ('auto',sliced['language']):
                 cached=folder/'cached-transcript.json'; w.save(cached,sliced)
         w.save(folder/'selection.json',selected)
+    moment_review=None
+    if options['mode']=='auto' and w.read(w.ROOT/'scheduler.json',{}).get('require_gta_moment_review'):
+        from gta_moments import review
+        stage('analyzing','Checking the selected GTA action or funny in-game moment')
+        moment_review=review(cached,video=raw)
+        w.save(folder/'gta-moment-review.json',moment_review)
+        if not moment_review['accepted']:raise RuntimeError(moment_review['reason'])
     stage('finishing','Adding the hook, speech captions and source credit')
     from finish_video import finish
-    finished=finish(raw,(options['hook'] or source['channel']+' | Stream highlight')[:85],source['channel'],
+    finished=finish(raw,(options['hook'] or (moment_review or {}).get('hook') or source['channel']+' | Stream highlight')[:85],source['channel'],
         transcript_file=cached,language=None if options['language']=='auto' else options['language'],
+        allow_no_speech=bool(moment_review and moment_review.get('accepted') is True),
         source_url=source['url'],category='GAMING / STREAM HIGHLIGHT')
+    if moment_review:
+        metadata=w.read(finished.parent/'metadata.json',{})
+        metadata['gta_moment_review']=moment_review
+        w.save(finished.parent/'metadata.json',metadata)
     result.update(file=str(finished),title=w.read(finished.parent/'metadata.json',{})['title'])
     jobs.update(identity,result=result)
     if options['publish']:

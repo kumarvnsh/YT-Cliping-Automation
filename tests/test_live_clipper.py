@@ -69,3 +69,8 @@ def test_segment_listing_retries_while_ffmpeg_locks_it(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'read_text', locked_once)
     monkeypatch.setattr(live_clipper.time, 'sleep', lambda _: None)
     assert live_clipper.completed_segments(tmp_path) == [(tmp_path / 'segment-000000.ts', 0.0, 2.0)]
+
+def test_source_resolution_preference_is_bounded():
+    from live_clipper import capture_format
+    assert 'height<=1080' in capture_format('https://www.youtube.com/watch?v=abcdefghijk',2160)
+    assert capture_format('https://www.twitch.tv/creator',1080)=='best[height<=1080]/best'

@@ -1,7 +1,8 @@
 {
   "enabled": true,
-  "scan_minutes": 360,
-  "post_minutes": 360,
+  "scan_minutes": 180,
+  "post_minutes": 180,
+  "require_gta_moment_review": true,
   "capture_seconds": 300,
   "selection": "rotate_streamers_then_highest_viewers",
   "privacy": "public",
@@ -10,5 +11,12 @@
   "early_publish_minutes": 0,
   "mode": "scan_capture_upload",
   "raw_retention_days": 3,
-  "replay_lookback_hours": 8
+  "replay_lookback_hours": 8,
+  "capture_max_height": 1080,
+  "commentary": {
+    "enabled": true,
+    "mode": "intro",
+    "voice": "chatterbox:0.7:0.4",
+    "rate": "+0%"
+  }
 }

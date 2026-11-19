@@ -158,3 +158,43 @@ def test_known_youtube_rejection_does_not_create_uncertain_hold(tmp_path,monkeyp
     with pytest.raises(RuntimeError,match='uploadLimitExceeded'):
         worker.publish(video,{'title':'test','description':'source'},{'game':'gta5'},state)
     assert state['uploads'][0]['status']=='rejected'
+
+def test_unreviewed_auto_upload_never_contacts_youtube(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
+    monkeypatch.setattr(worker,'source_allowed',lambda _:True)
+    worker.save(tmp_path/'scheduler.json',{'enabled':True,'require_gta_moment_review':True})
+    monkeypatch.setattr(worker,'youtube',lambda:pytest.fail('unreviewed upload'))
+    for accepted in (None,False,'true'):
+        with pytest.raises(RuntimeError,match='moment review'):
+            worker.publish(Path('unused.mp4'),{'gta_moment_review':{'accepted':accepted}}, {},{'uploads':[]},run_now=True)
+
+
+def test_three_hour_combined_cadence(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path/'work')
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
+    worker.save(tmp_path/'scheduler.json',{'enabled':True,'mode':'scan_capture_upload','scan_minutes':180,'post_minutes':180})
+    worker.save(worker.WORK/'state.json',{'uploads':[],'last_upload_at':worker.time.time()-2*3600})
+    monkeypatch.setattr(worker,'scan',lambda:pytest.fail('three hours not reached'))
+    assert worker.tick()['status'] in ('cycle_not_due','scan_not_due')
+
+def test_ready_queue_excludes_unreviewed_auto_clip(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path)
+    monkeypatch.setattr(worker,'source_allowed',lambda _:True)
+    clip=tmp_path/'ready.mp4';clip.write_bytes(b'video')
+    state={'uploads':[],'ready_clips':[{'file':str(clip),'ready_at':worker.time.time(),'source':{}}]}
+    monkeypatch.setattr(worker,'publish',lambda *args:pytest.fail('unreviewed reserve cannot publish'))
+    assert worker.publish_ready(state,{'require_gta_moment_review':True}) is None
+    assert state['ready_clips']==[]
+    assert clip.exists()
+
+def test_explicit_run_now_scans_before_timer_without_resetting_upload_ledger(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path/'work');monkeypatch.setattr(worker,'ROOT',tmp_path)
+    worker.save(tmp_path/'scheduler.json',{'enabled':True,'mode':'scan_capture_upload','scan_minutes':180})
+    recent=worker.time.time()
+    worker.save(worker.WORK/'state.json',{'uploads':[{'status':'uploaded','video_id':'existing'}],'last_upload_at':recent})
+    seen=[]
+    monkeypatch.setattr(worker,'scan',lambda:(seen.append(True) or [],[]))
+    assert worker.tick(scan_only=True,run_now=True)['status']=='scanned'
+    state=worker.read(worker.WORK/'state.json',{})
+    assert seen and state['last_upload_at']==recent
+    assert state['uploads'][0]['video_id']=='existing'

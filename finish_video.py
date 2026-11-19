@@ -173,8 +173,22 @@ def detect_content(source):
     return Counter(valid).most_common(1)[0][0] if valid else (width, height, 0, 0)
 
 
+def check_caption_evidence(transcript,source,allow_no_speech=False):
+    if transcript.get('segments'):return
+    if not allow_no_speech:
+        raise ValueError('No speech detected; no captions were invented')
+    checked=subprocess.run([ffmpeg(),'-hide_banner','-nostats','-i',str(source),'-vn',
+        '-af','volumedetect','-f','null','-'],capture_output=True,text=True,
+        encoding='utf-8',errors='replace',timeout=30)
+    peak=re.search(r'max_volume:\s*(-?\d+(?:\.\d+)?) dB',checked.stderr)
+    if checked.returncode or not peak or float(peak.group(1))<=-60:
+        raise ValueError('No audible source sound; skipping the uncaptioned action clip')
+    transcript['segments']=[]
+    transcript['review_status']='speech_not_recognized_no_generated_captions'
+
+
 def finish(source, hook, creator, output_dir=None, transcript_file=None,
-           model='small', language=None, category='GTA V / ROLEPLAY', source_url=None):
+           model='small', language=None, category='GTA V / ROLEPLAY', source_url=None,allow_no_speech=False):
     total_started = time.perf_counter()
     timings = {}
     template = load_template()
@@ -194,8 +208,7 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
         source_height=container.streams.video[0].height
         if container.duration:
             transcript['duration'] = container.duration / av.time_base
-    if not transcript.get('segments'):
-        raise ValueError('No speech detected; no captions were invented')
+    check_caption_evidence(transcript,source,allow_no_speech)
     (output_dir / 'transcript.json').write_text(json.dumps(transcript, indent=2, ensure_ascii=False), encoding='utf-8')
     ass, srt, count = build_subtitles(transcript, hook, creator, category)
     (output_dir / 'overlays.ass').write_text(ass, encoding='utf-8-sig')
@@ -206,7 +219,8 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
     if template.get('layout')=='clean_split':
         from adaptive_framing import detect_camera,video_graph
         detection=detect_camera(source,creator,output_dir)
-        graph,framing=video_graph(source_width,source_height,crop,detection.get('camera'),template)
+        graph,framing=video_graph(source_width,source_height,crop,detection.get('camera'),template,
+            presentation=detection.get('presentation'))
         framing['detection']=detection
     timings['layout_and_crop_seconds'] = round(time.perf_counter() - stage_started, 2)
     box, accent, background = template['gameplay_box'], template['accent'], template['background']

@@ -5,3 +5,4 @@ faster-whisper>=1.2,<2
 av>=11,<19
 filelock>=3.10
 websocket-client>=1.8
+edge-tts>=7.3,<8

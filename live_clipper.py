@@ -61,12 +61,17 @@ class SpikeDetector:
         return events
 
 
-def resolve(url):
+def capture_format(url,max_height=1080):
+    height=max(360,min(1080,int(max_height)))
+    return (f'best[height<={height}]/best' if 'twitch.tv/' in url else
+            f'bestvideo[height<={height}]+bestaudio/best[height<={height}]')
+
+
+def resolve(url,max_height=720):
     import yt_dlp
     with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True,
                           'socket_timeout': 20, 'retries': 2, 'source_address': '0.0.0.0',
-                          'format': ('best[height<=720]/best' if 'twitch.tv/' in url else
-                                     'bestvideo[height<=720]+bestaudio/best[height<=720]')}) as ydl:
+                          'format':capture_format(url,max_height)}) as ydl:
         info = ydl.extract_info(url, download=False)
     if info.get('live_status') != 'is_live':
         raise ValueError('Source is not currently live')

@@ -53,3 +53,50 @@ results in YouTube Studio. Then rely on the daily cron (uploads public).
 
 Copyright strikes possible (credit is not a license); reused-content
 demonetization; cookie expiry. See spec for details.
+
+## Shotsnip local scheduler
+
+The Windows worker uses `scheduler.json`: automatic discovery, capture, editing
+and publication run together every 180 minutes. The six-hour streamer cooldown
+is separate and keeps creator variety. Existing upload and uncertainty ledgers
+must be preserved; changing cadence must never repost a finished publication.
+
+Automatic clips require a GTA content review (`gta_moments.py`) in addition to
+Clips Kitty ranking. Police pursuits at any wanted level, police-car chases,
+combat, missions, discoveries, stunts/crashes and funny in-game events qualify
+when there is a concrete action beat. An ongoing chase does not need a final
+escape. Idle footage, menus and unrelated streamer banter do not qualify.
+
+Install the local visual model with `ollama pull qwen3-vl:4b-instruct` on the
+worker. The review samples four frames, then four staggered frames if needed, and uses the
+cached transcript when available. It uses one local model, an 8192-token visual
+context, a bounded request and a 60-second idle expiry. Models stay on D: under
+the existing Ollama configuration. This is sampled visual assessment, not a
+continuous-video guarantee; ambiguous or unavailable reviews reject automatic
+publication and the scheduler tries another source within its normal retry cap.
+The review is saved beside the raw clip and in final metadata for inspection.
+Explicit manual timestamp choices remain available as user overrides.
+
+For an explicitly requested immediate test, `python scheduled_clips.py --run-now`
+bypasses the cadence for that invocation only. Channel, content, pause and
+duplicate/uncertain-upload checks still apply; a successful upload restarts the
+normal timer. Do not use this override in scheduled invocations.
+
+GTA jobs request Clips Kitty gaming scoring (including software recovery),
+so in-game character movement is not mistaken for the streamer reacting.
+Routine footage needs a concrete entertaining reaction or interesting discovery;
+customization and first-time exploration are allowed alongside preferred action peaks. accepted automatic reviews also provide a concise factual
+hook before the game and creator names are added to the upload title.
+
+Selection uses a balanced standard: prefer action, but also accept concrete humor,
+streamer reactions, discoveries and mission dialogue. Rare landmarks and a dramatic
+ending are not required. Loading, menu-only footage, idle stretches and unrelated
+conversation remain excluded.
+
+The v4 framing preset preserves the full webcam panel, limits its enlargement to
+4x and requests source video up to 1080p when available. Camera motion and source
+sharpness are sampled before rendering. A frozen/soft camera stays visible in a
+small top-left box; a healthy camera uses the top split. No camera means footage
+only. This preserves actual source frames and does not invent missing motion.
+In-world phone/social apps, wildlife encounters and NPC interactions qualify as
+interesting game interactions; pause/settings screens remain excluded.

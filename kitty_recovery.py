@@ -12,7 +12,7 @@ import subprocess
 import time
 
 INSTALL = Path('D:/Clips-Kitty')
-FOCUS = 'A funny or surprising GTA gameplay moment with a clear payoff. Avoid loading screens and dead air.'
+from gta_moments import FOCUS
 
 
 def decoder_failure(error):
@@ -60,7 +60,7 @@ def score_cpu(video, video_id, output):
     from analysis.fusion import find_clips
     from llm.registry import create_backend
     config = load_config(INSTALL/'config/shotsnip.yaml')
-    config['clips'].update(min_score=55, max_clips_per_video=1, focus=FOCUS)
+    config['clips'].update(min_score=55, max_clips_per_video=1, focus=FOCUS, gaming_scoring=True)
     transcript = json.loads((INSTALL/'data/transcripts'/(video_id+'.json')).read_text(encoding='utf-8'))
     segments = [Segment(start=s['start'], end=s['end'], text=s['text'], words=s.get('words'))
                 for s in (transcript.get('segments') or [])]
@@ -68,7 +68,12 @@ def score_cpu(video, video_id, output):
         raise RuntimeError('No cached transcript available for decoder recovery')
     llm = create_backend(_with_usable_model(config['llm']))
     intent = clip_direction(config, llm, max(s.end for s in segments))
-    candidates, _ = find_clips(video, segments, llm, config, intent=intent)
+    from analysis.gaming import profile_for
+    source_path=video.parent/'source.json'
+    source=json.loads(source_path.read_text(encoding='utf-8')) if source_path.is_file() else {}
+    profile=profile_for(config,title=source.get('title','GTA gameplay'))
+    candidates, _ = find_clips(video, segments, llm, config, intent=intent,
+                              gaming=profile,measure_reaction=False)
     candidates = [c for c in candidates if c.score >= 55 and c.end > c.start]
     selected = None
     if candidates:
