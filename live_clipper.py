@@ -130,6 +130,12 @@ def select_segments(segments, end, duration):
     return selected, start - selected[0][1]
 
 
+def capture_stalled(fresh, segments, last_progress, now, limit=40):
+    # A reused (locked) listing cannot show new progress, e.g. right after a long
+    # clip render/finish blocked the loop; only judge a stall from a fresh read.
+    return bool(fresh and segments and now - last_progress > limit)
+
+
 def render(folder, end, duration, label, segments=None):
     # Reuse the listing the capture loop already read: re-reading it here can hit
     # ffmpeg's Windows file lock and abort the whole capture with PermissionError.
@@ -254,11 +260,13 @@ def monitor(url, seconds=180, test_clip_after=None, duration=30, reaction_delay=
                 if active_game() != scheduled_game:
                     raise RuntimeError('Game schedule switched; stopping this source. Restart discovery for the new game.')
                 elapsed = time.monotonic() - started
+                fresh = True
                 try:
                     segments = completed_segments(folder)
                 except PermissionError:
                     # Still locked by ffmpeg; reuse the last good listing this tick.
                     segments = previous_segments
+                    fresh = False
                 previous_segments = segments
                 if segments and segments[-1][2] > last_segment_end:
                     last_segment_end = segments[-1][2]
@@ -267,7 +275,7 @@ def monitor(url, seconds=180, test_clip_after=None, duration=30, reaction_delay=
                     raise TimeoutError('Capture exceeded wall-clock deadline')
                 if elapsed > 45 and not segments:
                     raise RuntimeError('Capture produced no completed segments; see capture.log')
-                if segments and time.monotonic() - last_progress > 40:
+                if capture_stalled(fresh, segments, last_progress, time.monotonic()):
                     raise RuntimeError('Live video capture stalled for 40 seconds')
                 if shutil.disk_usage(folder).free < 1024**3:
                     raise RuntimeError('Capture stopped: less than 1 GB free')

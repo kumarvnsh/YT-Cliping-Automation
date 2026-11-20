@@ -86,6 +86,16 @@ def test_render_uses_given_segments_without_rereading_locked_listing(tmp_path, m
     assert caught.value is sentinel
 
 
+def test_stall_is_not_judged_from_a_reused_locked_listing():
+    from live_clipper import capture_stalled
+    segments = [(Path('segment-000000.ts'), 0.0, 2.0)]
+    # Loop was blocked 90 s finishing a clip, then the listing was locked this tick.
+    assert not capture_stalled(False, segments, last_progress=0, now=90)
+    assert capture_stalled(True, segments, last_progress=0, now=90)
+    assert not capture_stalled(True, segments, last_progress=60, now=90)
+    assert not capture_stalled(True, [], last_progress=0, now=90)
+
+
 def test_source_resolution_preference_is_bounded():
     from live_clipper import capture_format
     assert 'height<=1080' in capture_format('https://www.youtube.com/watch?v=abcdefghijk',2160)
