@@ -130,6 +130,23 @@ def select_segments(segments, end, duration):
     return selected, start - selected[0][1]
 
 
+def segment_output_args(folder):
+    # ffmpeg sends each finished segment's list row to stdout instead of writing
+    # segments.csv itself. On Windows ffmpeg rewrites that file with a rename, and
+    # the rename fails ("Permission denied") whenever we are reading it, which
+    # stops the whole capture. We copy the rows into segments.csv ourselves.
+    return ['-f', 'segment', '-segment_time', '2', '-segment_list', 'pipe:1',
+            '-segment_list_type', 'csv', '-segment_list_size', '0',
+            '-reset_timestamps', '1', str(folder / 'segment-%06d.ts')]
+
+
+def copy_segment_listing(stream, listing):
+    with listing.open('ab') as out:
+        for line in iter(stream.readline, b''):
+            out.write(line)
+            out.flush()
+
+
 def capture_stalled(fresh, segments, last_progress, now, limit=40):
     # A reused (locked) listing cannot show new progress, e.g. right after a long
     # clip render/finish blocked the loop; only judge a stall from a fresh read.
@@ -238,10 +255,7 @@ def monitor(url, seconds=180, test_clip_after=None, duration=30, reaction_delay=
         command += ['-map', '0:v:0', '-map', '1:a:0']
     else:
         command += ['-map', '0:v:0', '-map', '0:a:0?']
-    command += ['-t', str(seconds), '-c', 'copy', '-f', 'segment',
-                '-segment_time', '2', '-segment_list', str(folder / 'segments.csv'),
-                '-segment_list_size', '200', '-reset_timestamps', '1',
-                str(folder / 'segment-%06d.ts')]
+    command += ['-t', str(seconds), '-c', 'copy'] + segment_output_args(folder)
     worker = threading.Thread(target=chat_worker, daemon=True)
     started = time.monotonic()
     last_progress = started
@@ -250,7 +264,10 @@ def monitor(url, seconds=180, test_clip_after=None, duration=30, reaction_delay=
     test_fired = False
     error = None
     with (folder / 'capture.log').open('w', encoding='utf-8') as capture_log:
-        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=capture_log)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=capture_log)
+        lister = threading.Thread(target=copy_segment_listing,
+                                  args=(process.stdout, folder / 'segments.csv'), daemon=True)
+        lister.start()
         worker.start()
         print(f'Monitoring {info["id"]}; artifacts: {folder}', flush=True)
         try:
@@ -332,6 +349,7 @@ def monitor(url, seconds=180, test_clip_after=None, duration=30, reaction_delay=
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+            lister.join(timeout=10)
             worker.join(timeout=35)
             summary['elapsed_seconds'] = round(time.monotonic() - started, 2)
             (folder / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')

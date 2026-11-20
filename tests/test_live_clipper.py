@@ -96,6 +96,24 @@ def test_stall_is_not_judged_from_a_reused_locked_listing():
     assert not capture_stalled(True, [], last_progress=0, now=90)
 
 
+def test_ffmpeg_never_rewrites_segment_listing_we_read(tmp_path):
+    import io
+    import live_clipper
+    args = live_clipper.segment_output_args(tmp_path)
+    # ffmpeg's rename over segments.csv fails on Windows while we read it.
+    assert not any('segments.csv' in a for a in args)
+    assert args[args.index('-segment_list') + 1] == 'pipe:1'
+    assert args[args.index('-segment_list_size') + 1] == '0'
+    assert args[args.index('-segment_list_type') + 1] == 'csv'
+    (tmp_path / 'segment-000000.ts').write_bytes(b'x')
+    (tmp_path / 'segment-000001.ts').write_bytes(b'x')
+    listing = tmp_path / 'segments.csv'
+    live_clipper.copy_segment_listing(io.BytesIO(
+        b'segment-000000.ts,0.000000,2.000000\nsegment-000001.ts,2.000000,4.000000\n'), listing)
+    assert live_clipper.completed_segments(tmp_path) == [
+        (tmp_path / 'segment-000000.ts', 0.0, 2.0), (tmp_path / 'segment-000001.ts', 2.0, 4.0)]
+
+
 def test_source_resolution_preference_is_bounded():
     from live_clipper import capture_format
     assert 'height<=1080' in capture_format('https://www.youtube.com/watch?v=abcdefghijk',2160)
