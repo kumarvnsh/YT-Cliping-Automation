@@ -22,6 +22,8 @@ FOCUS=('Prioritize distinctive in-world GTA interactions too: using the in-game 
        'An ongoing chase qualifies with a clear action beat; a final escape is not required. '
        'Never invent a wanted-star count. Prefer chat/audio/visual peaks and coherent context. '
        'Skip loading screens, pause/settings-only footage, idle stretches and unrelated conversation. '
+       'Prefer self-contained events with understandable setup and a visible consequence or reaction. '
+       'Start near the interesting action, avoid travel-to-mission filler, and keep the payoff. '
        'A clear entertaining or interesting gameplay moment is enough; it need not be exceptional.')
 
 
@@ -139,12 +141,13 @@ def _review_once(transcript=None,ask=None,video=None,offsets=(2,10,18,26)):
         'reason':('No concrete entertaining reaction, discovery or gameplay hook' if not exploration_supported(result) else str(result.get('reason','No clear requested GTA moment identified'))[:300])}
 
 
-def review(transcript=None,ask=None,video=None):
-    first=_review_once(transcript,ask,video)
+def review(transcript=None,ask=None,video=None,duration=30):
+    scale=min(1,max(1,float(duration))/30)
+    first=_review_once(transcript,ask,video,offsets=tuple(round(s*scale,2) for s in (2,10,18,26)))
     if first['accepted'] or video is None or first.get('review_unavailable') or first.get('basis')!='sampled_footage':
         return first
     # Brief impacts can fall between the first four frames. A second,
     # staggered pass keeps eight samples within the existing memory cap.
-    second=_review_once(transcript,ask,video,offsets=(4,12,20,28))
+    second=_review_once(transcript,ask,video,offsets=tuple(round(s*scale,2) for s in (4,12,20,28)))
     second['first_pass']={k:first.get(k) for k in ('accepted','category','reason','sample_times_seconds')}
     return second

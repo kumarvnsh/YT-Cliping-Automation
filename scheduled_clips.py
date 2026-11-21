@@ -260,6 +260,10 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
     marker = 'Shotsnip capture ' + operation
     record = dict(operation=operation, marker=marker, status='pending', started_at=now(),
         file=str(video), sha256=digest, source=source)
+    tag = metadata.get('growth_experiment')
+    if not manual and isinstance(tag, dict) and tag.get('id'):
+        record['growth_experiment'] = dict(tag)
+        record['rendered_seconds'] = metadata.get('duration_seconds')
     state.setdefault('uploads', []).append(record)
     save(WORK/'state.json', state)
     try:
@@ -455,11 +459,25 @@ def attempt_tick(scan_only=False,run_now=False):
                 if sliced['segments']:
                     cached=folder/'cached-transcript.json'; save(cached,sliced)
             hook=usable_hook({} if spikes else selected,chosen)
+            from growth_experiment import assignment
+            experiment=assignment(state,config.get('growth_experiment',{}).get('enabled',False))
+            review_duration=30
+            if experiment['id'] and experiment['source_seconds']==20:
+                tight=folder/'highlight-tight.mp4'
+                subprocess.run([ffmpeg(),'-v','error','-y','-ss','10','-i',str(raw),'-t','20',
+                    '-c:v','libx264','-preset','veryfast','-c:a','aac',str(tight)],check=True,timeout=120)
+                if safe_window(audio_bounds(tight),[20],duration=20) is None:
+                    raise RuntimeError('Compact experiment clip lacks complete audio')
+                raw=tight; review_duration=20
+                if cached:
+                    cached_data=read(cached,{})
+                    cached=folder/'cached-transcript-tight.json'
+                    save(cached,slice_transcript(cached_data,10,30))
             moment_review=None
             if config.get('require_gta_moment_review'):
                 from gta_moments import review
                 progress(state,'analyzing','Checking the footage for a clear GTA action, discovery or funny gameplay moment')
-                moment_review=review(cached,video=raw)
+                moment_review=review(cached,video=raw,duration=review_duration)
                 save(folder/'gta-moment-review.json',moment_review)
                 if not moment_review['accepted']:
                     progress(state,'waiting','No clearly supported GTA gameplay peak; trying another source')
@@ -473,9 +491,10 @@ def attempt_tick(scan_only=False,run_now=False):
             if not source_allowed(chosen):
                 raise RuntimeError('Schedule changed during editing; old-game clip will not be uploaded')
             metadata=read(finished.parent/'metadata.json',{})
+            metadata['growth_experiment']=experiment
             if moment_review:
                 metadata['gta_moment_review']=moment_review
-                save(finished.parent/'metadata.json',metadata)
+            save(finished.parent/'metadata.json',metadata)
             if config.get('commentary',{}).get('enabled'):
                 # Reach now favours Shorts that add the uploader's own contribution, so
                 # every automatic clip carries a narrated Shotsnip breakdown.

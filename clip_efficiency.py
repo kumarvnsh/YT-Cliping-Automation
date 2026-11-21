@@ -67,7 +67,7 @@ def checkpoints(snapshots):
             age=(observed-datetime.fromisoformat(published_at.replace('Z','+00:00')).timestamp())/3600
             if age<0: continue
             row=videos.setdefault(video['id'],{'id':video['id'],'title':video.get('title'),'checkpoints':{}})
-            for hour,tolerance in [(1,.5),(6,.5),(24,1)]:
+            for hour,tolerance in [(1,.5),(6,.5),(24,1),(72,2)]:
                 key=str(hour); previous=row['checkpoints'].get(key)
                 if abs(age-hour)<=tolerance and (previous is None or abs(age-hour)<abs(previous['age_hours']-hour)):
                     row['checkpoints'][key]={'views':video['views'],'age_hours':round(age,4),

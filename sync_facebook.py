@@ -70,6 +70,7 @@ def sync():
         for row in response.get('data',[]): ids[row['id']]=row
         after=response.get('paging',{}).get('cursors',{}).get('after')
         if not response.get('paging',{}).get('next') or not after: break
+    meta_created_ids={id_ for id_, row in ids.items() if row.get('created_time')}
     state_path=ROOT/'work/scheduler/state.json'
     state=json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {}
     for upload in state.get('uploads',[]):
@@ -90,6 +91,7 @@ def sync():
         video['title']=video.get('title') or (video.get('description') or '').split('\n')[0] or 'Shotsnip Reel '+video['id']
         video.pop('description',None)
         row=video_metrics(get,video)
+        row['created_time_source']='meta' if video['id'] in meta_created_ids else 'unverified'
         row['checked_at']=now.isoformat()
         result['videos'].append(row)
     videos=result['videos']
@@ -111,6 +113,7 @@ def sync():
         result['window_views']=None; result['errors'].append(str(exc))
     from sync_analytics import save
     save(ROOT/'work/dashboard/facebook-analytics.json',result)
+    save(ROOT/'work/dashboard/facebook-analytics-history'/f'{now.strftime("%Y%m%dT%H%M%SZ")}.json',result)
     save(ROOT/'work/dashboard/facebook-health.json',{'status':'connected','checked_at':result['checked_at'],
         'metrics_status':result['metrics_status'],'measured_videos':result['measured_videos'],'missing_videos':result['missing_videos']})
     return result

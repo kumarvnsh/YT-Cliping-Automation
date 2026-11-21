@@ -130,6 +130,8 @@ def _sync():
     observations=[json.loads(p.read_text(encoding='utf-8')) for p in (ROOT/'work/dashboard/analytics-history').glob('*.json')]
     save(ROOT/'work/dashboard/age-performance.json',{'checked_at':snapshot['checked_at'],
         'videos':checkpoints(observations),'note':'Real observations near 1h, 6h and 24h; no interpolation.'})
+    from growth_experiment import report
+    save(ROOT/'work/dashboard/growth-experiment.json',report(ROOT,snapshot,observations))
     print(f"Refreshed {config['name']}: {len(snapshot['videos'])} videos; owner analytics {snapshot['owner_analytics']['status']}")
     return snapshot
 

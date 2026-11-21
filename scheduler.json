@@ -18,5 +18,18 @@
     "mode": "intro",
     "voice": "chatterbox:0.7:0.4",
     "rate": "+0%"
+  },
+  "growth_experiment": {
+    "enabled": true,
+    "id": "shotsnip-pacing-20261121",
+    "max_published_clips": 24,
+    "variants": [
+      "tight_20s",
+      "context_30s"
+    ],
+    "review_hours": [
+      24,
+      72
+    ]
   }
 }
