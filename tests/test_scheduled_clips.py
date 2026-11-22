@@ -57,7 +57,7 @@ def test_timeout_is_durable_and_second_attempt_never_calls_youtube(tmp_path,monk
     monkeypatch.setattr(worker,'youtube',lambda:Upload())
     state={'uploads':[]}
     with pytest.raises(RuntimeError,match='uncertain'):
-        worker.publish(video,{'title':'clip','description':'source'}, {'game':'gta5'}, state)
+        worker.publish(video,{'title':'Car flips off the pier','description':'source'}, {'game':'gta5'}, state)
     persisted=worker.read(worker.WORK/'state.json',{})
     assert persisted['uploads'][0]['status']=='uncertain'
     assert persisted['uploads'][0]['marker'] not in calls[0]['body']['snippet']['description']
@@ -157,7 +157,7 @@ def test_known_youtube_rejection_does_not_create_uncertain_hold(tmp_path,monkeyp
     monkeypatch.setattr(worker,'youtube',lambda:API())
     state={'uploads':[]}
     with pytest.raises(RuntimeError,match='uploadLimitExceeded'):
-        worker.publish(video,{'title':'test','description':'source'},{'game':'gta5'},state)
+        worker.publish(video,{'title':'Plane lands in a field','description':'source'},{'game':'gta5'},state)
     assert state['uploads'][0]['status']=='rejected'
 
 def test_unreviewed_auto_upload_never_contacts_youtube(tmp_path,monkeypatch):

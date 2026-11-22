@@ -255,17 +255,19 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
     digest=hashlib.sha256(video.read_bytes()).hexdigest()
     if any(row.get('sha256')==digest and row['status'] in ('uploaded','pending','uncertain','quarantined') for row in state.get('uploads',[])):
         raise RuntimeError('This exact clip is already uploaded or quarantined; choose another clip')
-    yt = youtube()  # Verify before creating any remote video.
     from clip_titles import upload_title
     from public_metadata import description
     metadata['description']=description(metadata.get('description',''))
     if not metadata.get('commentary'):
         metadata['title']=upload_title(source,metadata.get('title') or metadata.get('hook'),metadata.get('creator'))
+    import youtube_rules  # spacing, streamer variety and title rules hold for every path, run-now included
+    youtube_rules.check(source,metadata.get('title',''),state,config,ROOT)
+    yt = youtube()  # Verify before creating any remote video.
     progress(state,'uploading','Uploading the finished clip to verified Shotsnip')
     operation = uuid.uuid4().hex
     marker = 'Shotsnip capture ' + operation
     record = dict(operation=operation, marker=marker, status='pending', started_at=now(),
-        file=str(video), sha256=digest, source=source)
+        file=str(video), sha256=digest, source=source, title=metadata.get('title','')[:100])
     tag = metadata.get('growth_experiment')
     if not manual and isinstance(tag, dict) and tag.get('id'):
         record['growth_experiment'] = dict(tag)
@@ -294,7 +296,7 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
         raise RuntimeError('Upload response uncertain. Publishing held to prevent duplicates; reconcile channel uploads.') from None
     record.update(status='uploaded',video_id=result['id'],finished_at=now(),
         requested_privacy=privacy,returned_privacy=result.get('status',{}).get('privacyStatus'))
-    state['last_upload_at']=time.time()
+    state['last_upload_at']=state['last_youtube_upload_at']=time.time()
     save(WORK/'state.json', state)
     latest=read(ROOT/'scheduler.json',{})
     if latest.get('pending_scan_minutes'):
@@ -329,11 +331,26 @@ def publish_ready(state, config):
     save(WORK/'state.json',state)
     if not keep or time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
         return None
-    item=keep[0]; video=Path(item['file'])
-    result=publish(video,read(video.parent/'metadata.json',{}),item['source'],state)
-    state['ready_clips']=keep[1:]
-    save(WORK/'state.json',state)
-    return result
+    import youtube_rules
+    if youtube_rules.spacing_wait(state,config):
+        return None
+    for item in list(keep):  # the first clip that passes the variety and title rules goes out
+        video=Path(item['file'])
+        try:
+            result=publish(video,read(video.parent/'metadata.json',{}),item['source'],state)
+        except youtube_rules.RuleHold as hold:
+            if hold.kind=='spacing':return None
+            if hold.kind=='title':  # a vague or repeated title never gets better by waiting
+                keep.remove(item)
+                progress(state,'queued',f'Clip dropped: {hold}')
+            state['ready_clips']=keep
+            save(WORK/'state.json',state)
+            continue
+        keep.remove(item)
+        state['ready_clips']=keep
+        save(WORK/'state.json',state)
+        return result
+    return None
 
 
 def attempt_tick(scan_only=False,run_now=False):

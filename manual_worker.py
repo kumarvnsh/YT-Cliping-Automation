@@ -108,7 +108,9 @@ def defer_publication(job,state):
     if job['result'].get('publication',{}).get('youtube_id') and job['options']['platforms']==['facebook']:
         return False
     config=w.read(w.ROOT/'scheduler.json',{})
-    eligible=max(state.get('last_upload_at',0)+jobs.publish_gap_minutes(job,config)*60,job['options'].get('not_before') or 0)
+    import youtube_rules
+    spacing=youtube_rules.spacing_wait(state,config) if 'youtube' in job['options']['platforms'] else None
+    eligible=max(state.get('last_upload_at',0)+jobs.publish_gap_minutes(job,config)*60,job['options'].get('not_before') or 0,spacing or 0)
     if time.time()>=eligible:return False
     jobs.update(job['id'],status='queued_publish',stage='queued',result=job['result'],
         note='Finished clip queued for the next posting window')
