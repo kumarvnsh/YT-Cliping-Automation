@@ -144,6 +144,8 @@ def crosspost(record: dict, video, title: str, description: str = "", root=None)
     try:
         if not enabled(root):
             return
+        from public_metadata import description as clean_description
+        description=clean_description(description)
         desc = title + ("\n\n" + description if description else "")
         reel_id = post_reel(video, desc, root=root)
         record["facebook"] = {"status": "published", "reel_id": reel_id, "at": _now()}

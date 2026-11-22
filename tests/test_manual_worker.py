@@ -60,7 +60,7 @@ def test_selected_youtube_privacy_is_forwarded(tmp_path,monkeypatch):
     monkeypatch.setattr(worker.w,'publish',publish)
     worker.publish_result({'options':{'platforms':['youtube'],'privacy':'private'}},
         {'file':str(video),'source':{}},{})
-    assert observed=={'destinations':['youtube'],'privacy':'private','manual':True}
+    assert observed=={'destinations':['youtube'],'privacy':'private','manual':True,'run_now':False}
 
 
 def test_state_save_retries_transient_windows_lock(tmp_path,monkeypatch):

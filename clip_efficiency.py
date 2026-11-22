@@ -26,7 +26,7 @@ def cleanup(root,days=3,kitty_root=None):
     root=Path(root).resolve(); cutoff=time.time()-days*86400; removed=0; freed=0
     candidates=list((root/'work/scheduler').glob('*/capture.mp4'))
     candidates+=list((root/'work/scheduler').glob('*/highlight.mp4'))
-    candidates+=list((root/'work/live').glob('*/segment-*.ts'))
+    # Raw transport segments are handled by the lock- and queue-aware retention guard.
     candidates+=list((root/'work/live').glob('*/clip-*.mp4'))
     for path in candidates:
         resolved=path.resolve()

@@ -446,9 +446,10 @@ def narrate(finished, metadata=None, transcript_file=None, source=None, voice=DE
         'title': script['title'], 'hook': script['title'], 'output': str(output),
         'duration_seconds': round(rendered, 2),
         'description': (f"{script['hook']}\n\n"
-                        + ('Shotsnip intro and edit.\n' if intro else 'Shotsnip breakdown and commentary.\n')
                         + f"Original moment: {creator}" + (f"\n{url}" if url else '')),
         'commentary': {'policy_version': POLICY_VERSION, 'mode': mode, 'voice': voice, 'script': script,
                        'originality': check, 'timeline': pieces, 'base_clip': str(finished)}})
     (folder / 'metadata.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding='utf-8')
+    from studio_events import record_finished
+    record_finished(output, 'shotsnip', folder.parent.name)
     return output

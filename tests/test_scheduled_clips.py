@@ -60,7 +60,8 @@ def test_timeout_is_durable_and_second_attempt_never_calls_youtube(tmp_path,monk
         worker.publish(video,{'title':'clip','description':'source'}, {'game':'gta5'}, state)
     persisted=worker.read(worker.WORK/'state.json',{})
     assert persisted['uploads'][0]['status']=='uncertain'
-    assert persisted['uploads'][0]['marker'] in calls[0]['body']['snippet']['description']
+    assert persisted['uploads'][0]['marker'] not in calls[0]['body']['snippet']['description']
+    assert calls[0]['body']['snippet']['description']=='source'
     with pytest.raises(RuntimeError,match='Unresolved'):
         worker.publish(video,{}, {'game':'gta5'}, persisted)
     assert len(calls)==1

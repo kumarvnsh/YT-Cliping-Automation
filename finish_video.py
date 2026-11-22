@@ -285,6 +285,8 @@ def finish(source, hook, creator, output_dir=None, transcript_file=None,
     timings['includes_capture_or_upload'] = False
     (output_dir / 'timings.json').write_text(json.dumps(timings, indent=2), encoding='utf-8')
     print(json.dumps(timings), flush=True)
+    from studio_events import record_finished
+    record_finished(output, 'shotsnip', source.parent.name)
     print(f'Finished: {output}', flush=True)
     return output
 

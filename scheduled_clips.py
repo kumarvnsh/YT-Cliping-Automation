@@ -11,6 +11,7 @@ import shutil
 import time
 import uuid
 import requests
+from studio_events import scope as studio_scope, emit as studio_emit, record_finished
 from game_schedule import active_game, title_matches, IST
 from live_clipper import capture_format,ffmpeg, resolve
 from stream_sources import scan as scan_live, choose, choose_varied, any_gta
@@ -82,6 +83,9 @@ def progress(state, phase, note):
     state.setdefault('events',[]).append({'at':at,'phase':phase,'note':note})
     state['events']=state['events'][-30:]
     save(WORK/'state.json',state)
+    identity=state.get('studio_job_id') or 'scheduler'
+    with studio_scope(ROOT, 'shotsnip', identity, phase):
+        studio_emit('worker_progress')
 
 
 def usable_hook(selected, source):
@@ -253,6 +257,8 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
         raise RuntimeError('This exact clip is already uploaded or quarantined; choose another clip')
     yt = youtube()  # Verify before creating any remote video.
     from clip_titles import upload_title
+    from public_metadata import description
+    metadata['description']=description(metadata.get('description',''))
     if not metadata.get('commentary'):
         metadata['title']=upload_title(source,metadata.get('title') or metadata.get('hook'),metadata.get('creator'))
     progress(state,'uploading','Uploading the finished clip to verified Shotsnip')
@@ -268,7 +274,7 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
     save(WORK/'state.json', state)
     try:
         result = yt.videos().insert(part='snippet,status', body={
-            'snippet':{'title':metadata['title'][:100], 'description':metadata['description']+'\n\n'+marker,
+            'snippet':{'title':metadata['title'][:100], 'description':metadata['description'],
                 'categoryId':'20', 'tags':['Gaming' if source.get('manual') else 'GTA' if source['game']=='gta' else 'GTA6' if source['game']=='gta6' else 'GTA5','Shorts','Shotsnip']},
             'status':{'privacyStatus':privacy,'selfDeclaredMadeForKids':False}},
             media_body=MediaFileUpload(str(video),mimetype='video/mp4',resumable=True)).execute(num_retries=0)
@@ -348,7 +354,15 @@ def attempt_tick(scan_only=False,run_now=False):
             if manual_jobs.pending(ROOT):
                 return {'status':'manual_job_queued'}
             from clip_efficiency import cleanup
-            save(ROOT/'work/dashboard/cleanup.json',cleanup(ROOT,config.get('raw_retention_days',3),'D:/Clips-Kitty'))
+            from raw_retention import raw_retention
+            raw_days = config.get('raw_retention_days', 3)
+            cleanup_report = cleanup(ROOT, raw_days, 'D:/Clips-Kitty')
+            segment_days = config.get('raw_segment_retention_days', raw_days)
+            segment_report = raw_retention(ROOT, days=segment_days, delete=True, held_scheduler_lock=lock)
+            cleanup_report['files_removed'] += segment_report['removed']
+            cleanup_report['bytes_freed'] += segment_report['bytes_removed']
+            cleanup_report['raw_segments'] = segment_report
+            save(ROOT/'work/dashboard/cleanup.json', cleanup_report)
             if not config.get('enabled',False):
                 progress(state,'paused','Automatic posting is paused')
                 return {'status':'disabled'}
@@ -398,6 +412,7 @@ def attempt_tick(scan_only=False,run_now=False):
             ensure_kitty()
             api('/health/preflight')
             folder=WORK/(datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+chosen['id'])
+            state['studio_job_id']=folder.name
             folder.mkdir()
             save(folder/'source.json',chosen)
             state.setdefault('capture_history',[]).append({'at':time.time(),'source':chosen})
@@ -508,6 +523,7 @@ def attempt_tick(scan_only=False,run_now=False):
                     progress(state,'waiting',str(exc))
                     return {'status':'no_quality_clip','reason':str(exc)}
                 metadata=read(finished.parent/'metadata.json',{})
+            record_finished(finished, 'shotsnip', folder.name)
             save(folder/'selection.json',selected)
             stop_after_stage()
             if not read(ROOT/'scheduler.json',{}).get('enabled'):

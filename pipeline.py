@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 import browser_heatmap
+from studio_events import call as studio_call, scope as studio_scope
 import motion
 from heatmaps import parse_watch_heatmap
 
@@ -158,7 +159,7 @@ def _prompt(src_title, src_channel, src_url):
 
 def _openai_meta(prompt):
     from openai import OpenAI
-    r = OpenAI().chat.completions.create(
+    r = studio_call('openai', 'clip_metadata', 'gpt-4o-mini', OpenAI().chat.completions.create,
         model="gpt-4o-mini",
         response_format={"type": "json_object"},
         messages=[{"role": "system", "content": META_SYSTEM},
@@ -168,7 +169,7 @@ def _openai_meta(prompt):
 
 def _claude_meta(prompt):
     import anthropic
-    r = anthropic.Anthropic().messages.create(
+    r = studio_call('anthropic', 'clip_metadata', 'claude-haiku-4-5', anthropic.Anthropic().messages.create,
         model="claude-haiku-4-5", max_tokens=1000,
         system=META_SYSTEM,
         messages=[{"role": "user", "content": prompt}])
@@ -176,6 +177,13 @@ def _claude_meta(prompt):
 
 
 def gen_metadata(src_title, src_channel, src_url):
+    import hashlib
+    identity = hashlib.sha256(str(src_url).encode()).hexdigest()[:24]
+    with studio_scope(Path(__file__).resolve().parent, 'shotsnip', identity, 'metadata'):
+        return _gen_metadata(src_title, src_channel, src_url)
+
+
+def _gen_metadata(src_title, src_channel, src_url):
     prompt = _prompt(src_title, src_channel, src_url)
     try:
         meta = _openai_meta(prompt)

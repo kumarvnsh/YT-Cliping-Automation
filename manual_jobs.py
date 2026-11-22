@@ -7,6 +7,7 @@ import time
 from urllib.parse import urlparse,parse_qs
 from contextlib import contextmanager
 import uuid
+from studio_events import scope as studio_scope, emit as studio_emit
 
 ROOT=Path(__file__).resolve().parent
 
@@ -87,13 +88,20 @@ def decode(row):
 
 
 def enqueue(body,root=None):
-    options=validate(body); ids=[]
-    for window in options['ranges'] or [None]:
-        item={**options,'window':window}; identity=uuid.uuid4().hex; at=time.time()
-        with connection(root) as db:
-            db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,0)',(identity,'queued',at,at,'queued','Waiting for the current job to finish',json.dumps(item),'{}',None))
-        ids.append(identity)
-    return ids
+    with connection(root) as db:
+        return enqueue_options(db, validate(body))
+
+
+def enqueue_options(db, options):
+    return [enqueue_job(db, dict(options, window=window)) for window in options['ranges'] or [None]]
+
+
+def enqueue_job(db, options):
+    identity=uuid.uuid4().hex
+    at=time.time()
+    db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,0)',
+               (identity,'queued',at,at,'queued','Waiting for the current job to finish',json.dumps(options),'{}',None))
+    return identity
 
 
 def list_jobs(root=None):
@@ -112,11 +120,22 @@ def update(identity,root=None,**fields):
     fields['updated']=time.time()
     with connection(root) as db:
         db.execute('UPDATE jobs SET '+','.join(k+'=?' for k in fields)+' WHERE id=?',(*fields.values(),identity))
+    with studio_scope(Path(root or ROOT), 'shotsnip', identity, fields.get('stage', 'queue')):
+        studio_emit('job_updated', status=fields.get('status'), cancel=fields.get('cancel'))
+
+
+def publishing_paused(root=None):
+    """The owner paused manual publishing: waiting clips stay queued and live operations do not wait for them."""
+    try:
+        return bool(json.loads((Path(root or ROOT)/'scheduler.json').read_text(encoding='utf-8')).get('manual_publishing_paused'))
+    except (OSError,ValueError,AttributeError):
+        return False
 
 
 def pending(root=None):
+    statuses="('queued','running','publishing')" if publishing_paused(root) else "('queued','queued_publish','running','publishing')"
     with connection(root) as db:
-        return bool(db.execute("SELECT 1 FROM jobs WHERE status IN ('queued','queued_publish','running','publishing') LIMIT 1").fetchone())
+        return bool(db.execute(f"SELECT 1 FROM jobs WHERE status IN {statuses} LIMIT 1").fetchone())
 
 
 def recover_interrupted(root=None):
@@ -126,41 +145,110 @@ def recover_interrupted(root=None):
         db.execute("UPDATE jobs SET status='attention',stage='attention',error='Worker stopped while publishing; reconcile platform status before retry' WHERE status='publishing'")
 
 
+MAX_SCHEDULE_DAYS=30
+MANUAL_GAP_CHOICES=(30,60,90,120,180,240,360,480)
+
+
+def publish_gap_minutes(job,config):
+    """Minutes a manual clip waits after the previous upload, shared with the posting window."""
+    if isinstance(config.get('manual_post_minutes'),int):
+        return config['manual_post_minutes']
+    if job.get('options',{}).get('local_library_batch'):
+        return 120
+    return max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))
+
+
+def due(job,now=None):
+    """A clip scheduled for later is not claimed before its time."""
+    after=job.get('options',{}).get('not_before')
+    return not isinstance(after,(int,float)) or after<=(now or time.time())
+
+
+def estimate(rows,last_upload_at,config,now=None):
+    """Expected publish times for waiting clips, following the worker's claim order and gaps."""
+    now=now or time.time(); waiting=[r for r in rows if r['status']=='queued_publish']
+    waiting.sort(key=lambda r:(r['created'],r['id'])); times={}; last=last_upload_at or 0; clock=now
+    while waiting:
+        def ready_at(job):
+            return max(clock,last+publish_gap_minutes(job,config)*60,job['options'].get('not_before') or 0)
+        job=min(waiting,key=lambda r:(ready_at(r),r['created'],r['id']))
+        clock=ready_at(job); times[job['id']]=clock; last=clock; waiting.remove(job)
+    return times
+
+
 def claim(root=None):
     with connection(root) as db:
         db.execute('BEGIN IMMEDIATE')
-        row=db.execute("SELECT * FROM jobs WHERE status IN ('queued','queued_publish') ORDER BY created LIMIT 1").fetchone()
-        if not row: return None
-        job=decode(row); job['publishing_only']=job['status']=='queued_publish'
+        rows=[decode(r) for r in db.execute("SELECT * FROM jobs WHERE status IN ('queued','queued_publish') ORDER BY created,id")]
+        paused=publishing_paused(root)
+        job=next((r for r in rows if r['status']=='queued' or (due(r) and not paused)),None)
+        if not job: return None
+        job['publishing_only']=job['status']=='queued_publish'
         db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?",(time.time(),job['id']))
         return job
 
 
 def control(identity,action,root=None):
-    job=get(identity,root)
+    with connection(root) as db:
+        db.execute('BEGIN IMMEDIATE')
+        control_job(db, identity, action)
+
+
+def control_job(db, identity, action, expected=None, value=None):
+    job=decode(db.execute('SELECT * FROM jobs WHERE id=?',(identity,)).fetchone())
     if not job: raise ValueError('Job not found')
+    if expected is not None and job['updated'] != expected:
+        raise ValueError('The job changed. Refresh and review it again.')
+
+    def change(**fields):
+        if 'options' in fields:
+            fields['options']=json.dumps(fields['options'])
+        fields['updated']=time.time()
+        db.execute('UPDATE jobs SET '+','.join(k+'=?' for k in fields)+' WHERE id=?',(*fields.values(),identity))
+
     if action=='cancel':
-        if job['status'] in ('queued','queued_publish'): update(identity,root,status='cancelled',stage='cancelled',note='Cancelled before starting')
-        elif job['status']=='running': update(identity,root,cancel=1,note='Stopping after this stage')
+        if job['status'] in ('queued','queued_publish'): change(status='cancelled',stage='cancelled',note='Cancelled before starting')
+        elif job['status']=='running': change(cancel=1,note='Stopping after this stage')
         else: raise ValueError('This job is not active')
     elif action=='retry':
         if job['status']!='failed': raise ValueError('Only a failed processing job can be retried')
-        update(identity,root,status='queued',stage='queued',cancel=0,error=None)
+        change(status='queued',stage='queued',cancel=0,error=None)
     elif action=='publish':
         if job['status']!='ready': raise ValueError('Only a ready preview can be published')
-        update(identity,root,status='queued_publish',stage='queued',cancel=0)
+        change(status='queued_publish',stage='queued',cancel=0)
     elif action=='retry_facebook':
         publication=job['result'].get('publication',{})
         facebook=publication.get('facebook') or {}
         if job['status']!='partial' or not publication.get('youtube_id') or not re.search(r'failed \((?:400|401|403|404|422)\)',facebook.get('error','')):
             raise ValueError('Facebook outcome must be a confirmed rejection before retrying it')
         options={**job['options'],'platforms':['facebook']}
-        update(identity,root,options=options,status='queued_publish',stage='queued',cancel=0,error=None)
+        change(options=options,status='queued_publish',stage='queued',cancel=0,error=None)
+    elif action in ('move_earlier','move_later'):
+        # Claim order is creation time: swap places with the neighbouring waiting clip.
+        if job['status'] not in ('queued','queued_publish'): raise ValueError('Only a waiting clip can be moved')
+        waiting=[r['id'] for r in db.execute("SELECT id FROM jobs WHERE status IN ('queued','queued_publish') ORDER BY created,id")]
+        stamps=[r[0] for r in db.execute("SELECT created FROM jobs WHERE status IN ('queued','queued_publish') ORDER BY created,id")]
+        index=waiting.index(identity); other=index-1 if action=='move_earlier' else index+1
+        if not 0<=other<len(waiting): raise ValueError('This clip is already '+('first' if action=='move_earlier' else 'last'))
+        waiting[index],waiting[other]=waiting[other],waiting[index]
+        # Keep the original times but make them strictly increasing so equal timestamps still reorder.
+        for position,(job_id,stamp) in enumerate(zip(waiting,stamps)):
+            db.execute('UPDATE jobs SET created=? WHERE id=?',(stamp+position*1e-6,job_id))
+        db.execute('UPDATE jobs SET updated=? WHERE id=?',(time.time(),identity))
+    elif action=='schedule':
+        if job['status'] not in ('ready','queued','queued_publish'): raise ValueError('Only a waiting clip can be scheduled')
+        options=dict(job['options'])
+        if value is None:
+            options.pop('not_before',None)
+        else:
+            if not isinstance(value,(int,float)) or isinstance(value,bool) or not time.time()-60<=value<=time.time()+MAX_SCHEDULE_DAYS*86400:
+                raise ValueError(f'Choose a time within the next {MAX_SCHEDULE_DAYS} days')
+            options['not_before']=float(value)
+        change(options=options)
     elif action=='prioritize':
         # Claim order is creation time, so moving to the front means sorting before every queued job.
         if job['status'] not in ('queued','queued_publish'): raise ValueError('Only a waiting job can move to the front')
-        with connection(root) as db:
-            first=db.execute("SELECT MIN(created) FROM jobs WHERE status IN ('queued','queued_publish')").fetchone()[0]
-            if first is not None and first<job['created']:
-                db.execute('UPDATE jobs SET created=?,updated=? WHERE id=?',(first-1,time.time(),identity))
+        first=db.execute("SELECT MIN(created) FROM jobs WHERE status IN ('queued','queued_publish')").fetchone()[0]
+        if first is not None and first<job['created']:
+            change(created=first-1)
     else: raise ValueError('Unknown job control')

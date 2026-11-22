@@ -73,12 +73,14 @@ def exact_download(source,info,folder,window):
 def publish_result(job,result,state):
     options=job['options']; video=Path(result['file']); metadata=w.read(video.parent/'metadata.json',{})
     from clip_titles import upload_title
-    metadata['title']=upload_title(result['source'],metadata.get('title') or metadata.get('hook'),metadata.get('creator'))
+    from local_library_batch import interval
+    if interval(job) is None:
+        metadata['title']=upload_title(result['source'],metadata.get('title') or metadata.get('hook'),metadata.get('creator'))
     w.save(video.parent/'metadata.json',metadata)
     destinations=options['platforms']
     if 'youtube' in destinations:
         record=w.publish(video,metadata,result['source'],state,destinations=destinations,
-            privacy=options['privacy'],manual=True)
+            privacy=options['privacy'],manual=True,run_now=interval(job) is not None)
         return {'youtube_id':record['video_id'],'youtube_privacy':record.get('returned_privacy'),
                 'facebook':record.get('facebook')}
     import facebook_shotsnip as fb
@@ -106,7 +108,7 @@ def defer_publication(job,state):
     if job['result'].get('publication',{}).get('youtube_id') and job['options']['platforms']==['facebook']:
         return False
     config=w.read(w.ROOT/'scheduler.json',{})
-    eligible=state.get('last_upload_at',0)+max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60
+    eligible=max(state.get('last_upload_at',0)+jobs.publish_gap_minutes(job,config)*60,job['options'].get('not_before') or 0)
     if time.time()>=eligible:return False
     jobs.update(job['id'],status='queued_publish',stage='queued',result=job['result'],
         note='Finished clip queued for the next posting window')
@@ -121,8 +123,14 @@ def process(job):
         if jobs.get(identity)['cancel']: raise Cancelled()
         jobs.update(identity,stage=name,note=note)
         state['manual_job_id']=identity
+        state['studio_job_id']=identity
         w.progress(state,name,note)
     result=job['result']
+    from local_library_batch import interval,prepare
+    if interval(job) is not None and not result.get('prepared'):
+        result=prepare(job,stage)
+        job['result']=result
+        jobs.update(identity,result=result)
     if job.get('publishing_only'):
         if defer_publication(job,state):return
         stage('uploading','Publishing the reviewed manual clip')
@@ -211,6 +219,7 @@ def process(job):
         metadata=w.read(finished.parent/'metadata.json',{})
         metadata['gta_moment_review']=moment_review
         w.save(finished.parent/'metadata.json',metadata)
+    w.record_finished(finished, 'shotsnip', identity)
     result.update(file=str(finished),title=w.read(finished.parent/'metadata.json',{})['title'])
     jobs.update(identity,result=result)
     if options['publish']:
@@ -250,6 +259,8 @@ def run():
                     error=message,note='Publishing needs review' if publishing else 'Processing failed; retry or edit the request')
                 state=w.read(w.WORK/'state.json',{}); report_failure(state,job['id'],message,publishing)
         finally:
+            from local_library_batch import resume_if_complete
+            resume_if_complete()
             lock.seek(0); msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
 
 
