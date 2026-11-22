@@ -552,6 +552,8 @@ def attempt_tick(scan_only=False,run_now=False):
 
 
 def tick(scan_only=False,run_now=False):
+    from local_library_batch import enforce_hold
+    enforce_hold()
     for number in range(1,4):
         error=None
         try:

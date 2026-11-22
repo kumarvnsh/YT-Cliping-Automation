@@ -7,10 +7,27 @@ BATCH='local-library-20261121'
 def interval(job):
     return 120 if job.get('options',{}).get('local_library_batch')==BATCH else None
 
+def enforce_hold():
+    import scheduled_clips as w
+    config=w.read(w.ROOT/'scheduler.json',{})
+    flag=w.ROOT/'work/dashboard/live-operations-batch-hold.json'
+    if (config.get('ended_batch_hold') or {}).get('batch')==BATCH:
+        # The owner ended this hold; their decision stands and is never re-applied automatically.
+        flag.unlink(missing_ok=True)
+        if config.pop('live_operations_batch_hold',None) is not None:w.save(w.ROOT/'scheduler.json',config)
+        return
+    hold=w.read(flag,{}) or config.get('live_operations_batch_hold') or {}
+    if hold.get('batch')!=BATCH or len(hold.get('job_ids',[]))!=15:return
+    if not flag.exists():w.save(flag,hold)
+    if config.get('enabled') or config.get('live_operations_batch_hold')!=hold:
+        config.update(enabled=False,live_operations_batch_hold=hold)
+        w.save(w.ROOT/'scheduler.json',config)
+
 def resume_if_complete():
     """Resume live operations only after every explicitly listed batch job finishes."""
     import scheduled_clips as w
     import manual_jobs as jobs
+    enforce_hold()
     config=w.read(w.ROOT/'scheduler.json',{})
     hold=config.get('live_operations_batch_hold') or {}
     identities=hold.get('job_ids',[])
@@ -24,6 +41,7 @@ def resume_if_complete():
     config.pop('live_operations_batch_hold',None)
     config['last_completed_library_batch']={'batch':BATCH,'completed_at':w.now()}
     w.save(w.ROOT/'scheduler.json',config)
+    (w.ROOT/'work/dashboard/live-operations-batch-hold.json').unlink(missing_ok=True)
     return True
 
 def prepare(job, stage):
