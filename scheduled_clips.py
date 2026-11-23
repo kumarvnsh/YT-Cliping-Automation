@@ -255,11 +255,16 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
     digest=hashlib.sha256(video.read_bytes()).hexdigest()
     if any(row.get('sha256')==digest and row['status'] in ('uploaded','pending','uncertain','quarantined') for row in state.get('uploads',[])):
         raise RuntimeError('This exact clip is already uploaded or quarantined; choose another clip')
-    from clip_titles import upload_title
+    from clip_titles import game_hashtag, upload_title, with_game
     from public_metadata import description
     metadata['description']=description(metadata.get('description',''))
     if not metadata.get('commentary'):
         metadata['title']=upload_title(source,metadata.get('title') or metadata.get('hook'),metadata.get('creator'))
+    else:  # commentary titles are our own angle; they still name the game for search and suggestions
+        metadata['title']=with_game(metadata.get('title') or metadata.get('hook'),source)
+    tag=game_hashtag(source)
+    if tag and tag.casefold() not in metadata['description'].casefold():
+        metadata['description']=(metadata['description']+'\n\n'+tag+' #Shorts').strip()
     import youtube_rules  # spacing, streamer variety and title rules hold for every path, run-now included
     youtube_rules.check(source,metadata.get('title',''),state,config,ROOT)
     yt = youtube()  # Verify before creating any remote video.

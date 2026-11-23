@@ -38,3 +38,27 @@ def upload_title(source, hook='', creator=None):
     if len(hook)>room:
         hook=hook[:room-1].rsplit(' ',1)[0].rstrip(' ,;:|')+'…'
     return f'{hook} | {suffix}'
+
+
+NAMED=re.compile(r'\b(?:gta|grand\s+theft\s+auto)\s*[-:]?\s*(?:vi|v|6|5)\b',re.I)
+
+
+def with_game(title, source):
+    """Put the evidenced game in front of a commentary title ("GTA 6: Ludwig walks into a fire").
+
+    Commentary titles are written as our own angle without the "| streamer | game" template, so they carried
+    no game at all and lost the GTA 6 search and suggestion traffic. Only a game proven by the live category
+    or the stream title is added, and never twice.
+    """
+    title=' '.join(str(title or '').split())
+    label=game_label(source)
+    if label not in ('GTA 6','GTA 5') or not title or NAMED.search(title):
+        return title
+    room=100-len(label)-2
+    if len(title)>room:
+        title=title[:room-1].rsplit(' ',1)[0].rstrip(' ,;:|')+'…'
+    return f'{label}: {title}'
+
+
+def game_hashtag(source):
+    return {'GTA 6':'#GTA6','GTA 5':'#GTA5'}.get(game_label(source),'')

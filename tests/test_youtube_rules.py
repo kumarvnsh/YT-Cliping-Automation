@@ -78,3 +78,14 @@ def test_ready_queue_skips_a_repeat_streamer_and_drops_a_vague_title(tmp_path, m
     worker.publish_ready(state, {})
     assert sent == ['Speed steals a fire truck | IShowSpeed | GTA 6']
     assert [Path(c['file']).parent.name for c in state['ready_clips']] == ['a']  # Kai waits; the vague Rubius clip is gone
+
+
+def test_commentary_titles_name_the_evidenced_game():
+    from clip_titles import game_hashtag, with_game
+    gta6 = {'game': 'gta6', 'channel': 'Ludwig', 'title': 'DAY 4 NON-LETHAL GTA VI RUN'}
+    assert with_game('Ludwig in a tense mission setup', gta6) == 'GTA 6: Ludwig in a tense mission setup'
+    assert with_game('GTA 6 bank job goes wrong', gta6) == 'GTA 6 bank job goes wrong'   # never twice
+    assert with_game('Grand Theft Auto VI heist', gta6) == 'Grand Theft Auto VI heist'
+    assert with_game('Plane lands in a field', {'game': 'gta', 'title': ''}) == 'Plane lands in a field'  # unproven: untouched
+    assert len(with_game('x' * 120, gta6)) <= 100
+    assert game_hashtag(gta6) == '#GTA6' and game_hashtag({'game': 'gta', 'title': ''}) == ''
