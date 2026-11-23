@@ -38,3 +38,22 @@ def test_checkpoint_reuses_publish_time_when_detail_lookup_failed():
           {'checked_at':'2026-11-18T13:42:00+00:00','videos':[{'id':'v','views':300,'published_at':'2026-11-18T08:49:00Z'}]}]
     p=checkpoints(rows)[0]['checkpoints']
     assert p['1']['views']==30 and '6' not in p
+
+
+def test_finished_manual_jobs_release_their_kitty_downloads(tmp_path):
+    import json, os, time
+    import manual_jobs
+    from clip_efficiency import cleanup
+    kitty = tmp_path/'kitty'; downloads = kitty/'data/downloads'; downloads.mkdir(parents=True)
+    old = time.time() - 5*86400
+    with manual_jobs.connection(tmp_path) as db:
+        for job, status in (('donejob', 'published'), ('waitjob', 'queued_publish')):
+            db.execute('INSERT INTO jobs (id,status) VALUES (?,?)', (job, status))
+            folder = tmp_path/'work/manual'/job; folder.mkdir(parents=True)
+            record = folder/'kitty-job.json'; record.write_text(json.dumps({'video_id': f'local_{job[:4]}aa'}))
+            media = downloads/f'local_{job[:4]}aa.mp4'; media.write_bytes(b'v')
+            for p in (record, media):
+                os.utime(p, (old, old))
+    cleanup(tmp_path, 3, kitty)
+    assert not (downloads/'local_doneaa.mp4').exists()   # published: download freed
+    assert (downloads/'local_waitaa.mp4').exists()        # still waiting to publish: kept

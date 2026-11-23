@@ -21,6 +21,23 @@ def slice_transcript(transcript,start,end):
     return result
 
 
+def finished_manual_records(root):
+    """Kitty records of manual / library jobs that are over (published, cancelled or failed).
+
+    Their Clips Kitty downloads (local_*.mp4) were never cleaned: only scheduler records were checked.
+    A job still queued, publishing or needing attention keeps its download.
+    """
+    done=set()
+    try:
+        import manual_jobs
+        with manual_jobs.connection(root) as db:
+            done={r['id'] for r in db.execute("SELECT id FROM jobs WHERE status IN ('published','cancelled','failed')")}
+    except Exception:  # noqa: BLE001 - no job database: nothing manual is cleaned
+        return []
+    folder=Path(root)/'work/manual'
+    return [p for job in done for name in ('kitty-job.json','selection.json') if (p:=folder/job/name).is_file()]
+
+
 def cleanup(root,days=3,kitty_root=None):
     """Only named raw artifacts; preserve final clips, metadata and analytics."""
     root=Path(root).resolve(); cutoff=time.time()-days*86400; removed=0; freed=0
@@ -35,6 +52,7 @@ def cleanup(root,days=3,kitty_root=None):
     if kitty_root:
         downloads=(Path(kitty_root)/'data/downloads').resolve()
         records=list((root/'work/scheduler').glob('*/selection.json'))+list((root/'work/scheduler').glob('*/kitty-job.json'))
+        records+=finished_manual_records(root)
         for selection in records:
             if selection.stat().st_mtime>=cutoff: continue
             item=json.loads(selection.read_text(encoding='utf-8'))
