@@ -391,10 +391,26 @@ def attempt_tick(scan_only=False,run_now=False):
             if any(row['status'] in ('pending','uncertain') for row in state['uploads']):
                 raise RuntimeError('Unresolved upload in ledger; publishing held to prevent duplicates')
             combined=config.get('mode')=='scan_capture_upload'
+            if combined and state.get('ready_clips') and not scan_only:
+                # A finished clip that waited for its posting window goes out first, before anything new is
+                # recorded (23 Nov: finished clips were discarded and replaced by fresh recordings).
+                held=publish_ready(state,config)
+                if held:
+                    return held
             if combined:
                 base=max(state.get('last_cycle_at',0),state.get('last_upload_at',0))
                 if not run_now and not retry and time.time()-base<config.get('scan_minutes',90)*60 and state.get('game',active_game())==active_game():
                     return {'status':'cycle_not_due'}
+                import youtube_rules
+                window=youtube_rules.spacing_wait(state,config)
+                if window and not run_now and not scan_only and window-time.time()>20*60:
+                    # Recording takes about 15 minutes; a clip made earlier could not be posted (daily cap / gap)
+                    # and was wasted. Wait, without starting a cycle, until the window is about to open.
+                    # The dispatcher starts a cycle scan_minutes after last_cycle_at: due again 20 minutes before the window.
+                    state['last_cycle_at']=window-20*60-config.get('scan_minutes',90)*60
+                    progress(state,'waiting','Next YouTube upload allowed after '
+                             +datetime.fromtimestamp(window,IST).strftime('%d %b %H:%M')+'; recording starts shortly before')
+                    return {'status':'waiting_window','until':window}
                 state['last_cycle_at']=time.time(); save(WORK/'state.json',state)
             if not scan_only and not combined:
                 publish_ready(state,config)
@@ -553,7 +569,18 @@ def attempt_tick(scan_only=False,run_now=False):
                 progress(state,'ready','Automatic publishing paused; finished clip saved in reserve')
                 return {'status':'ready'}
             if combined:
-                return publish(finished,metadata,chosen,state,run_now=run_now)
+                import youtube_rules
+                try:
+                    return publish(finished,metadata,chosen,state,run_now=run_now)
+                except youtube_rules.RuleHold as hold:
+                    if hold.kind=='title':  # a vague or repeated title never gets better by waiting
+                        raise
+                    # Not yet (posting window) or same streamer too soon: keep the finished clip for the queue.
+                    state.setdefault('ready_clips',[]).append({'file':str(finished),'source':chosen,
+                        'title':metadata['title'],'ready_at':time.time()})
+                    state['status']='queued'; state.pop('error',None)
+                    progress(state,'queued',f'Finished clip kept for later: {hold}')
+                    return {'status':'queued','ready_clips':len(state['ready_clips'])}
             state.setdefault('ready_clips',[]).append({'file':str(finished),'source':chosen,
                 'title':metadata['title'],'ready_at':time.time()})
             state['status']='queued'; state.pop('error',None)

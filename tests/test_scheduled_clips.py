@@ -199,3 +199,29 @@ def test_explicit_run_now_scans_before_timer_without_resetting_upload_ledger(tmp
     state=worker.read(worker.WORK/'state.json',{})
     assert seen and state['last_upload_at']==recent
     assert state['uploads'][0]['video_id']=='existing'
+
+
+def test_combined_cycle_publishes_a_held_clip_before_recording_anything(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path/'work');monkeypatch.setattr(worker,'ROOT',tmp_path)
+    worker.save(tmp_path/'scheduler.json',{'enabled':True,'mode':'scan_capture_upload','scan_minutes':180,'post_minutes':180})
+    clip=tmp_path/'held.mp4';clip.write_bytes(b'video')
+    worker.save(worker.WORK/'state.json',{'uploads':[],'last_upload_at':worker.time.time()-4*3600,
+        'ready_clips':[{'file':str(clip),'ready_at':worker.time.time(),'source':{'game':'gta6'}}]})
+    monkeypatch.setattr(worker,'publish_ready',lambda state,config:{'status':'uploaded','held':True})
+    monkeypatch.setattr(worker,'scan',lambda:pytest.fail('a held clip goes out before anything new is recorded'))
+    assert worker.tick()['held']
+
+
+def test_no_recording_while_the_daily_cap_is_full(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path/'work');monkeypatch.setattr(worker,'ROOT',tmp_path)
+    worker.save(tmp_path/'scheduler.json',{'enabled':True,'mode':'scan_capture_upload','scan_minutes':180,'post_minutes':180,
+                                           'youtube_rules':{'max_per_day':3,'min_gap_minutes':120}})
+    t=worker.time.time()
+    ups=[{'status':'uploaded','video_id':f'v{i}','finished_at':worker.datetime.fromtimestamp(t-h*3600,worker.timezone.utc).isoformat(),
+          'source':{'channel':f's{i}'}} for i,h in enumerate((10,7,4))]
+    worker.save(worker.WORK/'state.json',{'uploads':ups,'last_upload_at':t-4*3600,'last_cycle_at':t-4*3600})
+    monkeypatch.setattr(worker,'scan',lambda:pytest.fail('the cap is full: nothing could be posted'))
+    result=worker.tick()
+    assert result['status']=='waiting_window'
+    state=worker.read(worker.WORK/'state.json',{})
+    assert abs(state['last_cycle_at']+180*60+20*60-result['until'])<2  # next cycle 20 min before the window
