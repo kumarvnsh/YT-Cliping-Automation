@@ -3,7 +3,7 @@
   "scan_minutes": 240,
   "post_minutes": 240,
   "require_gta_moment_review": true,
-  "capture_seconds": 300,
+  "capture_seconds": 450,
   "selection": "rotate_streamers_then_highest_viewers",
   "privacy": "public",
   "max_ready_clips": 5,
@@ -41,14 +41,14 @@
     "by": "owner"
   },
   "youtube_rules": {
-    "min_gap_minutes": 120,
-    "max_per_day": 3,
+    "min_gap_minutes": 300,
+    "max_per_day": 4,
     "same_streamer_hours": 8,
     "recent_titles": 60,
     "similar_titles": 0.7
   },
   "ready_clips_expire_at_midnight": true,
-  "record_lead_minutes": 20,
+  "record_lead_minutes": 25,
   "never_posted_cleanup_hours": 6,
   "posted_cleanup_hours": 6
 }
