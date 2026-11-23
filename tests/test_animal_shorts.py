@@ -1,3 +1,4 @@
+from pathlib import Path
 import unittest
 
 import animal_shorts as a
@@ -70,7 +71,31 @@ class Twist(unittest.TestCase):
         self.assertEqual(ass.count('Dialogue:'), 4)
 
 
+class Facebook(unittest.TestCase):
+    def test_published_short_is_cross_posted_with_its_description(self):
+        import json, tempfile
+        from unittest.mock import patch
+        import facebook_shotsnip, scheduled_clips
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / 'run'; folder.mkdir()
+            (folder / 'short.mp4').write_bytes(b'0')
+            (folder / 'metadata.json').write_text(json.dumps({'description': 'Credit: X - url'}))
+            record, calls = {'file': str(folder / 'short.mp4'), 'title': 'Cat chaos', 'video_id': 'yt1'}, []
+            def fake(rec, video, title, description, root):
+                calls.append((title, description)); rec['facebook'] = {'status': 'published', 'reel_id': 'r1'}
+            with patch.object(facebook_shotsnip, 'crosspost', fake), patch.object(scheduled_clips, 'WORK', Path(tmp)):
+                result = a.crosspost_facebook(record, {'uploads': [record]})
+            self.assertEqual(calls, [('Cat chaos', 'Credit: X - url')])
+            self.assertEqual(result['reel_id'], 'r1')
+            self.assertEqual(json.loads((folder / 'metadata.json').read_text())['facebook']['reel_id'], 'r1')
+
+
 class Gate(unittest.TestCase):
+    def test_bot_checks_and_rate_limits_are_recognised(self):
+        self.assertTrue(a.youtube_blocked(RuntimeError("Sign in to confirm you’re not a bot")))
+        self.assertTrue(a.youtube_blocked(RuntimeError('HTTP Error 429: Too Many Requests')))
+        self.assertFalse(a.youtube_blocked(RuntimeError('Render failed: bad filter')))
+
     def test_verdicts(self):
         self.assertEqual(a.verdict(None), 'blocked')
         self.assertEqual(a.verdict({'status': {'uploadStatus': 'rejected', 'rejectionReason': 'claim'}}), 'blocked')

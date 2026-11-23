@@ -326,6 +326,14 @@ def download(c, folder):
     return files[0]
 
 
+BLOCK_SIGNS = ('confirm you', 'not a bot', '429', 'too many requests', 'rate-limit')
+
+
+def youtube_blocked(exc):
+    text = str(exc).casefold()
+    return any(sign in text for sign in BLOCK_SIGNS)
+
+
 # ---------- copyright gate ----------
 
 def verdict(item):
@@ -384,8 +392,11 @@ def cycle(state, config, run_now=False, yt=None):
         state['last_upload_at'] = state['last_youtube_upload_at'] = time.time()
         animal.pop('held')
         sc.save(sc.WORK / 'state.json', state)
+        if privacy == 'public':  # same Facebook Page Reel cross-post as GTA clips; never reverses the YouTube publish
+            crosspost_facebook(record, state)
         sc.progress(state, 'published', f"Published \"{held['title']}\" (credit: {held['source']['channel']})")
-        return {'status': 'published', 'video_id': held['video_id']}
+        return {'status': 'published', 'video_id': held['video_id'],
+                'facebook': (record.get('facebook') or {}).get('status')}
 
     # 2. make the next clip, when a cycle is due
     if not run_now and time.time() - animal.get('last_cycle_at', 0) < config.get('scan_minutes', 240) * 60:
@@ -431,6 +442,11 @@ def cycle(state, config, run_now=False, yt=None):
             voice_seconds, _ = speak(twist['voice_line'], folder / 'voice.mp3', voice)
             video, duration = render(src, folder / 'voice.mp3', voice_seconds, twist, folder)
         except Exception as exc:  # any per-candidate failure: try the next Short
+            if youtube_blocked(exc):  # a temporary bot check / rate limit says nothing about this Short
+                animal['blocked_at'] = time.time()
+                sc.save(sc.WORK / 'state.json', state)
+                sc.progress(state, 'queued', 'YouTube is rate-limiting downloads; trying again next cycle')
+                return {'status': 'youtube_blocked', 'error': str(exc)[:200]}
             animal['used'].append(c['id'])
             errors.append(f"{c['id']}: {exc}"[:300])
             continue
@@ -442,6 +458,20 @@ def cycle(state, config, run_now=False, yt=None):
     sc.save(sc.WORK / 'state.json', state)
     sc.progress(state, 'queued', f'No usable Short for "{query}" this cycle')
     return {'status': 'no_quality_clip', 'query': query, 'errors': errors[-5:]}
+
+
+def crosspost_facebook(record, state):
+    """Post the published Short as a Reel on the Shotsnip Facebook Page (best effort, result kept on the record)."""
+    import facebook_shotsnip as fb
+    import scheduled_clips as sc
+    video = Path(record['file'])
+    meta = sc.read(video.parent / 'metadata.json', {})
+    fb.crosspost(record, video, record.get('title', ''), meta.get('description', ''), ROOT)
+    sc.save(sc.WORK / 'state.json', state)
+    if meta:
+        meta.update(uploaded=True, uploaded_video_id=record.get('video_id'), facebook=record.get('facebook'))
+        sc.save(video.parent / 'metadata.json', meta)
+    return record.get('facebook')
 
 
 def upload_private(yt, video, meta, digest, state, animal, c):
