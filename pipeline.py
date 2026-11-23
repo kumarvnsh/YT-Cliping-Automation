@@ -127,10 +127,28 @@ def fetch_watch_heatmap(video_id):
         headers={"User-Agent": WATCH_USER_AGENT,
                  "Accept-Language": "en-US,en;q=0.9"},
     )
-    with _watch_page_deadline():
+    def fetch():
         with opener.open(request, timeout=WATCH_PAGE_SOCKET_TIMEOUT) as response:
-            html = response.read().decode("utf-8", errors="replace")
+            return response.read().decode("utf-8", errors="replace")
+
+    if hasattr(signal, "setitimer"):
+        with _watch_page_deadline():
+            html = fetch()
+    else:  # Windows has no SIGALRM: bound the whole request with a worker thread
+        html = _thread_deadline(fetch)
     return parse_watch_heatmap(html)
+
+
+def _thread_deadline(fetch):
+    """Run fetch() but give up after WATCH_PAGE_TOTAL_TIMEOUT seconds (the thread is abandoned)."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(fetch).result(timeout=WATCH_PAGE_TOTAL_TIMEOUT)
+    except FutureTimeout:
+        raise TimeoutError("watch-page request exceeded total deadline") from None
+    finally:
+        pool.shutdown(wait=False)
 
 
 def fetch_heatmap(video_id):

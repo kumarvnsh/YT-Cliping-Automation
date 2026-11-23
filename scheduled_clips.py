@@ -395,6 +395,9 @@ def attempt_tick(scan_only=False,run_now=False):
                 return {'status':'disabled'}
             if any(row['status'] in ('pending','uncertain') for row in state['uploads']):
                 raise RuntimeError('Unresolved upload in ledger; publishing held to prevent duplicates')
+            if setting(config,'niche')=='animals':  # animal & brainrot mode: most-viewed Shorts + twist + credit
+                import animal_shorts
+                return animal_shorts.cycle(state,config,run_now=run_now or retry)
             combined=config.get('mode')=='scan_capture_upload'
             if combined and state.get('ready_clips') and not scan_only:
                 # A finished clip that waited for its posting window goes out first, before anything new is

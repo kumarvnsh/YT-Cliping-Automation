@@ -100,3 +100,24 @@ small top-left box; a healthy camera uses the top split. No camera means footage
 only. This preserves actual source frames and does not invent missing motion.
 In-world phone/social apps, wildlife encounters and NPC interactions qualify as
 interesting game interactions; pause/settings screens remain excluded.
+
+## Animal & brainrot mode
+
+Set `"niche": "animals"` in `scheduler.json` (Studio HQ > Posting rules > Channel content) to switch Shotsnip from
+GTA stream clips to funny animal and brainrot Shorts. `animal_shorts.py` runs inside the normal scheduler tick:
+
+1. **Find**: YouTube search ordered by views, rotating queries (`animal_shorts.queries`) and time windows
+   (all-time / 30 days / 7 days). Every 3rd cycle (`long_form_every`) searches long compilations instead and cuts
+   their most-replayed 30 s (intro skipped). Channels over `max_channel_subscribers` (default 5M) and
+   `skip_channels` are left out: big media channels Content-ID everything.
+2. **Twist**: the local vision model (`qwen3-vl:4b-instruct`) describes four frames; `qwen3:8b` writes a hook title,
+   top hook text, a spoken reaction (Chatterbox/Edge voice) and 2-3 captions. Clip sits in the middle, hook band
+   above, captions below; the source's own watermark is left as it is.
+3. **Credit**: the description always names the original channel and links the original video (with `&t=` for
+   long-form clips). Nothing is credited on screen.
+4. **Copyright gate**: uploads go up **private**. After `check_minutes` (30) the next tick reads YouTube's verdict:
+   rejected or region-blocked videos stay private (`state.animal.quarantined`); clean ones are switched to the
+   owner's privacy setting when the posting rules (spacing, variety, titles) allow.
+
+Limit: the YouTube Data API reports rejections and blocks, not Content ID claims that only take the ad money.
+Those show in YouTube Studio > Content > Restrictions.

@@ -50,5 +50,10 @@
   "ready_clips_expire_at_midnight": true,
   "record_lead_minutes": 25,
   "never_posted_cleanup_hours": 6,
-  "posted_cleanup_hours": 6
+  "posted_cleanup_hours": 6,
+  "niche": "animals",
+  "animal_shorts": {
+    "min_views": 1000000,
+    "check_minutes": 30
+  }
 }

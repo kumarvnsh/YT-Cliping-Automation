@@ -194,6 +194,32 @@ def test_fetch_watch_heatmap_uses_watch_url_and_parses_response(monkeypatch):
     assert calls == [("https://www.youtube.com/watch?v=abc123", 20)]
 
 
+def test_fetch_watch_heatmap_thread_deadline_without_setitimer(monkeypatch):
+    import time
+
+    class Response:
+        def read(self):
+            time.sleep(1)
+            return b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Opener:
+        def open(self, _request, timeout):
+            return Response()
+
+    monkeypatch.setattr(pipeline, "build_opener", lambda *_handlers: Opener())
+    monkeypatch.delattr(pipeline.signal, "setitimer", raising=False)
+    monkeypatch.setattr(pipeline, "WATCH_PAGE_TOTAL_TIMEOUT", 0.2)
+    with pytest.raises(TimeoutError, match="watch-page request exceeded"):
+        pipeline.fetch_watch_heatmap("abc123")
+
+
+@pytest.mark.skipif(not hasattr(signal, "setitimer"), reason="SIGALRM timer is POSIX-only")
 def test_fetch_watch_heatmap_enforces_total_response_deadline(monkeypatch):
     handlers = []
     timers = []
