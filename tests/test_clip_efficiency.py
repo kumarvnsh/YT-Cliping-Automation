@@ -57,3 +57,19 @@ def test_finished_manual_jobs_release_their_kitty_downloads(tmp_path):
     cleanup(tmp_path, 3, kitty)
     assert not (downloads/'local_doneaa.mp4').exists()   # published: download freed
     assert (downloads/'local_waitaa.mp4').exists()        # still waiting to publish: kept
+
+
+def test_never_posted_clips_go_but_posted_queued_and_fresh_ones_stay(tmp_path):
+    import json, os, time
+    from clip_efficiency import stale_runs
+    sched = tmp_path/'work/scheduler'
+    old = time.time() - 8*3600
+    for name in ('dead', 'posted', 'queued', 'fresh', 'kept'):
+        run = sched/name; (run/'highlight-finished').mkdir(parents=True)
+        f = run/'highlight-finished'/'finished-short.mp4'; f.write_bytes(b'v')
+        if name != 'fresh':
+            os.utime(f, (old, old))
+    (sched/'kept'/'.studio-hq-keep').write_text('')
+    (sched/'state.json').write_text(json.dumps({'uploads': [{'file': str(sched/'posted'/'highlight-finished'/'finished-short.mp4')}],
+                                                'ready_clips': [{'file': str(sched/'queued'/'highlight-finished'/'finished-short.mp4')}]}))
+    assert [r.name for r in stale_runs(tmp_path, 0.25)] == ['dead']
