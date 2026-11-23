@@ -403,6 +403,15 @@ def attempt_tick(scan_only=False,run_now=False):
                     return {'status':'cycle_not_due'}
                 import youtube_rules
                 window=youtube_rules.spacing_wait(state,config)
+                if state.get('ready_clips') and not run_now and not scan_only:
+                    # A finished clip is already waiting: record nothing new, and wake exactly when it may post.
+                    gap=max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60
+                    due=max(window or 0,state.get('last_upload_at',0)+gap)
+                    if due>time.time():
+                        state['last_cycle_at']=due-config.get('scan_minutes',90)*60+30
+                        progress(state,'queued','A finished clip is waiting; it posts after '
+                                 +datetime.fromtimestamp(due,IST).strftime('%d %b %H:%M'))
+                        return {'status':'held_clip_waiting','until':due}
                 if window and not run_now and not scan_only and window-time.time()>20*60:
                     # Recording takes about 15 minutes; a clip made earlier could not be posted (daily cap / gap)
                     # and was wasted. Wait, without starting a cycle, until the window is about to open.

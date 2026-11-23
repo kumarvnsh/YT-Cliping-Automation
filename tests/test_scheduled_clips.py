@@ -225,3 +225,18 @@ def test_no_recording_while_the_daily_cap_is_full(tmp_path,monkeypatch):
     assert result['status']=='waiting_window'
     state=worker.read(worker.WORK/'state.json',{})
     assert abs(state['last_cycle_at']+180*60+20*60-result['until'])<2  # next cycle 20 min before the window
+
+
+def test_a_waiting_clip_blocks_new_recording_until_its_slot(tmp_path,monkeypatch):
+    monkeypatch.setattr(worker,'WORK',tmp_path/'work');monkeypatch.setattr(worker,'ROOT',tmp_path)
+    worker.save(tmp_path/'scheduler.json',{'enabled':True,'mode':'scan_capture_upload','scan_minutes':180,'post_minutes':180})
+    t=worker.time.time()
+    clip=tmp_path/'held.mp4';clip.write_bytes(b'video')
+    worker.save(worker.WORK/'state.json',{'uploads':[],'last_upload_at':t-3.5*3600,'last_cycle_at':t-3.5*3600,
+        'ready_clips':[{'file':str(clip),'ready_at':t,'source':{'game':'gta6'}}]})
+    import youtube_rules
+    monkeypatch.setattr(youtube_rules,'spacing_wait',lambda state,config,at=None:t+15*60)
+    monkeypatch.setattr(worker,'publish_ready',lambda state,config:None)
+    monkeypatch.setattr(worker,'scan',lambda:pytest.fail('a clip is already waiting for this slot'))
+    result=worker.tick()
+    assert result['status']=='held_clip_waiting' and abs(result['until']-(t+15*60))<2
