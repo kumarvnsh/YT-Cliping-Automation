@@ -1,7 +1,7 @@
 {
   "enabled": true,
-  "scan_minutes": 180,
-  "post_minutes": 180,
+  "scan_minutes": 240,
+  "post_minutes": 240,
   "require_gta_moment_review": true,
   "capture_seconds": 300,
   "selection": "rotate_streamers_then_highest_viewers",
@@ -31,5 +31,24 @@
       24,
       72
     ]
-  }
+  },
+  "raw_segment_retention_days": 1,
+  "manual_post_minutes": 180,
+  "manual_publishing_paused": true,
+  "ended_batch_hold": {
+    "batch": "local-library-20261121",
+    "ended_at": "2026-11-22T07:35:41.891452+00:00",
+    "by": "owner"
+  },
+  "youtube_rules": {
+    "min_gap_minutes": 120,
+    "max_per_day": 3,
+    "same_streamer_hours": 8,
+    "recent_titles": 60,
+    "similar_titles": 0.7
+  },
+  "ready_clips_expire_at_midnight": true,
+  "record_lead_minutes": 20,
+  "never_posted_cleanup_hours": 6,
+  "posted_cleanup_hours": 6
 }

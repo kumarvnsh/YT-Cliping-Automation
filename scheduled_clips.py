@@ -13,6 +13,7 @@ import uuid
 import requests
 from studio_events import scope as studio_scope, emit as studio_emit, record_finished
 from game_schedule import active_game, title_matches, IST
+from owner_settings import value as setting
 from live_clipper import capture_format,ffmpeg, resolve
 from stream_sources import scan as scan_live, choose, choose_varied, any_gta
 
@@ -27,7 +28,7 @@ class StopRequested(Exception): pass
 def scan():
     """Add recent missed target broadcasts to the regular discovery pool."""
     from archive_streams import discover_recent
-    hours=read(ROOT/'scheduler.json',{}).get('replay_lookback_hours',8)
+    hours=setting(read(ROOT/'scheduler.json',{}),'replay_lookback_hours')
     rows,errors=scan_live()
     try:rows+=discover_recent(hours=hours,targets_only=True)
     except Exception as exc:errors.append('Recent target replays: '+type(exc).__name__)
@@ -135,7 +136,7 @@ def capture(source, folder, seconds=180):
     """Bounded public media capture; Twitch uses an anonymous playback token."""
     if shutil.disk_usage(folder).free<3*1024**3:
         raise RuntimeError('Less than 3 GB free; capture paused')
-    height=read(ROOT/'scheduler.json',{}).get('capture_max_height',1080)
+    height=setting(read(ROOT/'scheduler.json',{}),'capture_max_height')
     if source.get('archive'):
         import yt_dlp
         with yt_dlp.YoutubeDL({'quiet':True,'no_warnings':True,'socket_timeout':20,
@@ -248,9 +249,13 @@ def publish(video, metadata, source, state, destinations=None, privacy='public',
         raise RuntimeError('Unresolved upload; publishing held to prevent duplicates')
     config=read(ROOT/'scheduler.json',{})
     from gta_moments import approved
-    if not manual and config.get('require_gta_moment_review') and not approved(metadata.get('gta_moment_review')):
+    if not manual and setting(config,'require_gta_moment_review') and not approved(metadata.get('gta_moment_review')):
         raise RuntimeError('Automatic clip has not passed the requested GTA moment review')
-    if not run_now and time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
+    if not manual:
+        privacy=setting(config,'privacy')
+        if privacy!='public':
+            destinations=[d for d in (destinations or ['youtube','facebook']) if d!='facebook']
+    if not run_now and time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-setting(config,'early_publish_minutes'))*60:
         raise RuntimeError('Upload window has not opened')
     digest=hashlib.sha256(video.read_bytes()).hexdigest()
     if any(row.get('sha256')==digest and row['status'] in ('uploaded','pending','uncertain','quarantined') for row in state.get('uploads',[])):
@@ -329,12 +334,12 @@ def publish_ready(state, config):
         if any(row.get('status')=='uploaded' and Path(row.get('file','')).resolve()==Path(item['file']).resolve()
                for row in state.get('uploads',[])):
             continue
-        reviewed=not config.get('require_gta_moment_review') or approved(read(Path(item['file']).parent/'metadata.json',{}).get('gta_moment_review'))
-        if reviewed and source_allowed(item['source']) and datetime.fromtimestamp(item['ready_at'],IST).date()==datetime.fromtimestamp(time.time(),IST).date() and Path(item['file']).is_file():
+        reviewed=not setting(config,'require_gta_moment_review') or approved(read(Path(item['file']).parent/'metadata.json',{}).get('gta_moment_review'))
+        if reviewed and source_allowed(item['source']) and (not setting(config,'ready_clips_expire_at_midnight') or datetime.fromtimestamp(item['ready_at'],IST).date()==datetime.fromtimestamp(time.time(),IST).date()) and Path(item['file']).is_file():
             keep.append(item)
     state['ready_clips']=keep
     save(WORK/'state.json',state)
-    if not keep or time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60:
+    if not keep or time.time()-state.get('last_upload_at',0)<max(0,config.get('post_minutes',120)-setting(config,'early_publish_minutes'))*60:
         return None
     import youtube_rules
     if youtube_rules.spacing_wait(state,config):
@@ -377,9 +382,9 @@ def attempt_tick(scan_only=False,run_now=False):
                 return {'status':'manual_job_queued'}
             from clip_efficiency import cleanup
             from raw_retention import raw_retention
-            raw_days = config.get('raw_retention_days', 3)
-            cleanup_report = cleanup(ROOT, raw_days, 'D:/Clips-Kitty')
-            segment_days = config.get('raw_segment_retention_days', raw_days)
+            raw_days = setting(config,'raw_retention_days')
+            cleanup_report = cleanup(ROOT, raw_days, 'D:/Clips-Kitty', setting(config,'never_posted_cleanup_hours'))
+            segment_days = setting(config,'raw_segment_retention_days')
             segment_report = raw_retention(ROOT, days=segment_days, delete=True, held_scheduler_lock=lock)
             cleanup_report['files_removed'] += segment_report['removed']
             cleanup_report['bytes_freed'] += segment_report['bytes_removed']
@@ -405,18 +410,19 @@ def attempt_tick(scan_only=False,run_now=False):
                 window=youtube_rules.spacing_wait(state,config)
                 if state.get('ready_clips') and not run_now and not scan_only:
                     # A finished clip is already waiting: record nothing new, and wake exactly when it may post.
-                    gap=max(0,config.get('post_minutes',120)-config.get('early_publish_minutes',0))*60
+                    gap=max(0,config.get('post_minutes',120)-setting(config,'early_publish_minutes'))*60
                     due=max(window or 0,state.get('last_upload_at',0)+gap)
                     if due>time.time():
                         state['last_cycle_at']=due-config.get('scan_minutes',90)*60+30
                         progress(state,'queued','A finished clip is waiting; it posts after '
                                  +datetime.fromtimestamp(due,IST).strftime('%d %b %H:%M'))
                         return {'status':'held_clip_waiting','until':due}
-                if window and not run_now and not scan_only and window-time.time()>20*60:
+                lead=setting(config,'record_lead_minutes')*60
+                if window and not run_now and not scan_only and window-time.time()>lead:
                     # Recording takes about 15 minutes; a clip made earlier could not be posted (daily cap / gap)
                     # and was wasted. Wait, without starting a cycle, until the window is about to open.
                     # The dispatcher starts a cycle scan_minutes after last_cycle_at: due again 20 minutes before the window.
-                    state['last_cycle_at']=window-20*60-config.get('scan_minutes',90)*60
+                    state['last_cycle_at']=window-lead-config.get('scan_minutes',90)*60
                     progress(state,'waiting','Next YouTube upload allowed after '
                              +datetime.fromtimestamp(window,IST).strftime('%d %b %H:%M')+'; recording starts shortly before')
                     return {'status':'waiting_window','until':window}
@@ -424,24 +430,24 @@ def attempt_tick(scan_only=False,run_now=False):
             if not scan_only and not combined:
                 publish_ready(state,config)
             scan_due=retry or combined or time.time()-state.get('last_scan_at',0)>=config.get('scan_minutes',30)*60 or state.get('game',active_game())!=active_game()
-            if not scan_due and (scan_only or not state.get('selected') or len(state.get('ready_clips',[]))>=config.get('max_ready_clips',2)):
+            if not scan_due and (scan_only or not state.get('selected') or len(state.get('ready_clips',[]))>=setting(config,'max_ready_clips')):
                 return {'status':'scan_not_due'}
             state.pop('error',None)
             chosen=state.get('selected')
             if scan_due:
                 progress(state,'scanning','Checking target channels and public live streams')
                 rows,errors=scan()
-                chosen=choose_varied(rows,state,config.get('streamer_cooldown_hours',6))
+                chosen=choose_varied(rows,state,setting(config,'streamer_cooldown_hours'))
                 state.update(last_scan_at=time.time(),checked_at=now(),game=active_game(),
                              streams=rows,discovery_errors=errors,selected=chosen,status='scanned')
                 save(WORK/'state.json',state)
-            chosen=choose_varied(state.get('streams',[]),state,config.get('streamer_cooldown_hours',6))
+            chosen=choose_varied(state.get('streams',[]),state,setting(config,'streamer_cooldown_hours'))
             if not chosen and not scan_only:
                 progress(state,'scanning','Checking other public stream replays from the last eight hours')
                 from archive_streams import discover_recent
-                replays=discover_recent(hours=config.get('replay_lookback_hours',8))
+                replays=discover_recent(hours=setting(config,'replay_lookback_hours'))
                 state['replay_candidates']=replays
-                chosen=choose_varied(replays,state,config.get('streamer_cooldown_hours',6))
+                chosen=choose_varied(replays,state,setting(config,'streamer_cooldown_hours'))
             state['selected']=chosen
             save(WORK/'state.json',state)
             if scan_only or not chosen:
@@ -449,11 +455,11 @@ def attempt_tick(scan_only=False,run_now=False):
                     publish_ready(state,config)
                 progress(state,'waiting','No fresh streamer available; recent creators are on cooldown' if not chosen else 'Stream ranking refreshed')
                 return {'status':'scanned','selected':chosen}
-            if not combined and len(state.get('ready_clips',[]))>=config.get('max_ready_clips',2):
+            if not combined and len(state.get('ready_clips',[]))>=setting(config,'max_ready_clips'):
                 progress(state,'queued','Ready-clip queue is full; waiting for the posting window')
                 return {'status':'queue_full'}
             # An unavailable editor must not waste capture or post an arbitrary interval.
-            if config.get('require_gta_moment_review'):
+            if setting(config,'require_gta_moment_review'):
                 from gta_moments import preflight
                 preflight()
             ensure_kitty()
@@ -464,8 +470,8 @@ def attempt_tick(scan_only=False,run_now=False):
             save(folder/'source.json',chosen)
             state.setdefault('capture_history',[]).append({'at':time.time(),'source':chosen})
             state['capture_history']=state['capture_history'][-100:]
-            progress(state,'capturing',f"Capturing {config.get('capture_seconds',180)} seconds from {chosen['channel']}")
-            video=capture(chosen,folder,config.get('capture_seconds',180))
+            progress(state,'capturing',f"Capturing {setting(config,'capture_seconds')} seconds from {chosen['channel']}")
+            video=capture(chosen,folder,setting(config,'capture_seconds'))
             stop_after_stage()
             progress(state,'analyzing','Clips Kitty is finding and scoring highlights')
             selected=kitty_select(chosen,video,state)
@@ -480,7 +486,7 @@ def attempt_tick(scan_only=False,run_now=False):
             # Use Kitty's selected timing on ORIGINAL full-frame media, keeping our template.
             end=float(selected['end_s'])
             spikes=[event for event in read(folder/'chat-signals.json',{}).get('spikes',[])
-                    if 40 <= event['capture_offset'] <= config.get('capture_seconds',180)-5]
+                    if 40 <= event['capture_offset'] <= setting(config,'capture_seconds')-5]
             if spikes:
                 peak=max(spikes,key=lambda event:event['unique_chatters']/max(1,event['baseline']))
                 end=peak['capture_offset']-5
@@ -522,7 +528,7 @@ def attempt_tick(scan_only=False,run_now=False):
                     cached=folder/'cached-transcript.json'; save(cached,sliced)
             hook=usable_hook({} if spikes else selected,chosen)
             from growth_experiment import assignment
-            experiment=assignment(state,config.get('growth_experiment',{}).get('enabled',False))
+            experiment=assignment(state,setting(config,'growth_experiment.enabled'))
             review_duration=30
             if experiment['id'] and experiment['source_seconds']==20:
                 tight=folder/'highlight-tight.mp4'
@@ -536,7 +542,7 @@ def attempt_tick(scan_only=False,run_now=False):
                     cached=folder/'cached-transcript-tight.json'
                     save(cached,slice_transcript(cached_data,10,30))
             moment_review=None
-            if config.get('require_gta_moment_review'):
+            if setting(config,'require_gta_moment_review'):
                 from gta_moments import review
                 progress(state,'analyzing','Checking the footage for a clear GTA action, discovery or funny gameplay moment')
                 moment_review=review(cached,video=raw,duration=review_duration)

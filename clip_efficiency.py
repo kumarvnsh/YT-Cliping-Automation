@@ -83,7 +83,7 @@ def finished_manual_records(root):
     return [p for job in done for name in ('kitty-job.json','selection.json') if (p:=folder/job/name).is_file()]
 
 
-def cleanup(root,days=3,kitty_root=None):
+def cleanup(root,days=3,kitty_root=None,never_posted_hours=6):
     """Only named raw artifacts; preserve final clips, metadata and analytics."""
     root=Path(root).resolve(); cutoff=time.time()-days*86400; removed=0; freed=0
     candidates=list((root/'work/scheduler').glob('*/capture.mp4'))
@@ -107,7 +107,7 @@ def cleanup(root,days=3,kitty_root=None):
             if path.is_relative_to(downloads) and path.is_file() and path.stat().st_mtime<cutoff:
                 freed+=path.stat().st_size; path.unlink(); removed+=1
     import shutil
-    for run in stale_runs(root, 0.25):  # never posted and not queued for 6 hours: can never post, removed for good (owner, 23 Nov)
+    for run in stale_runs(root, never_posted_hours/24):  # never posted, not queued: removed for good (owner setting)
         size=sum(f.stat().st_size for f in run.rglob('*') if f.is_file())
         shutil.rmtree(run, ignore_errors=True)
         if not run.exists():

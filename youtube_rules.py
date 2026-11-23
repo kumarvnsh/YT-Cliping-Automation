@@ -5,7 +5,7 @@ followed by many near-identical "Kai Cenat Live | GTA 6 | ..." titles from one s
   - spacing:   at least `min_gap_minutes` between YouTube uploads, and at most `max_per_day` in any 24 hours
   - variety:   never the same streamer twice in a row, nor within `same_streamer_hours`
   - titles:    each title must describe the moment, and must not repeat or nearly repeat a recent title
-Settings live in scheduler.json under "youtube_rules"; the defaults below apply when it is absent.
+Settings live in scheduler.json under "youtube_rules" and are set from Studio HQ (owner_settings.py).
 """
 import json
 import re
@@ -13,7 +13,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-DEFAULTS = {'min_gap_minutes': 120, 'max_per_day': 3, 'same_streamer_hours': 8, 'recent_titles': 60, 'similar_titles': 0.7}
+from owner_settings import DEFAULTS as _OWNER
+DEFAULTS = {k.split('.', 1)[1]: v for k, v in _OWNER.items() if k.startswith('youtube_rules.')}
 FILLER = set('''a an the of in on at to and or with his her their its is are was it this that s
 live moment moments reaction reacts reacting highlight highlights stream streams streamer streaming gameplay clip clips
 game gaming gta grand theft auto v vi 5 6 playing plays played progress update day early access'''.split())
