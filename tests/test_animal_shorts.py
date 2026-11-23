@@ -90,6 +90,39 @@ class Facebook(unittest.TestCase):
             self.assertEqual(json.loads((folder / 'metadata.json').read_text())['facebook']['reel_id'], 'r1')
 
 
+class DirectPublish(unittest.TestCase):
+    def run_ready(self, hold=None):
+        import json, tempfile
+        from unittest.mock import patch
+        import scheduled_clips, youtube_rules
+        tmp = tempfile.mkdtemp()
+        folder = Path(tmp) / 'run'; folder.mkdir()
+        (folder / 'short.mp4').write_bytes(b'0')
+        (folder / 'metadata.json').write_text(json.dumps({'title': 'Cat chaos', 'description': 'Credit: X - url'}))
+        animal = {'ready': {'file': str(folder / 'short.mp4'), 'sha256': 'h', 'source': {'channel': 'X'},
+                            'title': 'Cat chaos'}}
+        state, posted, privacies = {'uploads': [], 'animal': animal}, [], []
+        def check(*_a, **_k):
+            if hold: raise hold
+        def fake_insert(_yt, _video, _meta, privacy):
+            privacies.append(privacy); return 'yt9'
+        with patch.object(scheduled_clips, 'WORK', Path(tmp)), patch.object(scheduled_clips, 'progress', lambda *a: None),                 patch.object(youtube_rules, 'check', check), patch.object(a, 'insert', fake_insert),                 patch.object(a, 'crosspost_facebook', lambda rec, st: posted.append(rec['video_id'])):
+            result = a.publish_ready(None, state, {'privacy': 'public'}, animal)
+        return result, state, posted, privacies
+
+    def test_finished_clip_goes_straight_to_public_and_facebook(self):
+        result, state, posted, privacies = self.run_ready()
+        self.assertEqual((result['status'], privacies, posted), ('published', ['public'], ['yt9']))
+        self.assertEqual(state['uploads'][0]['status'], 'uploaded')
+        self.assertNotIn('ready', state['animal'])
+
+    def test_spacing_keeps_the_clip_waiting_without_uploading(self):
+        import youtube_rules
+        result, state, posted, privacies = self.run_ready(youtube_rules.RuleHold('wait', 'spacing', wait_until=5))
+        self.assertEqual((result['status'], privacies, state['uploads']), ('held_clip_waiting', [], []))
+        self.assertIn('ready', state['animal'])
+
+
 class Gate(unittest.TestCase):
     def test_bot_checks_and_rate_limits_are_recognised(self):
         self.assertTrue(a.youtube_blocked(RuntimeError("Sign in to confirm you’re not a bot")))

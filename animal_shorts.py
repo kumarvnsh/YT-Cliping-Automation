@@ -22,11 +22,14 @@ CATEGORY = '15'  # Pets & Animals
 MAX_SECONDS = 59.0
 
 DEFAULTS = {
-    'queries': ['funny animals', 'funny cats', 'funny dogs', 'italian brainrot', 'brainrot animals',
-                'funny pets', 'cute animals funny', 'animal fails'],
+    # Mostly real funny animal clips (like "funny animal video 😂", 55M views); brainrot is 1 search in 10.
+    'queries': ['funny animal video', 'funny cats', 'funny dogs', 'funny animals', 'funny pets',
+                'funny cat video', 'funny dog video', 'animal fails', 'funny animal moments', 'italian brainrot'],
     'min_views': 1_000_000,
     'max_source_seconds': 60,
-    'check_minutes': 30,          # how long a private upload waits for YouTube's copyright check
+    'private_first': False,       # owner (24 Nov): upload straight to public in its slot; owner handles claims
+    'ready_lead_minutes': 60,     # direct mode: start making the next clip this long before its slot
+    'check_minutes': 30,          # private_first only: how long a private upload waits for YouTube's check
     'windows_days': [0, 30, 7],   # rotate: all-time, last 30 days, last 7 days (0 = all time)
     'max_channel_subscribers': 5_000_000,  # big media channels Content-ID everything; their clips only get blocked
     'skip_channels': [],
@@ -169,8 +172,8 @@ def describe_clip(src, model, frames=4):
 def twist_prompt(c):
     seen = f"What happens (seen in the frames): {c['seen']}\n" if c.get('seen') else ''
     return (
-        "You are the writer for Shotsnip, a Shorts channel that re-shares viral funny animal and brainrot clips "
-        "with its own comedy twist.\n"
+        "You are the writer for Shotsnip, a Shorts channel that re-shares viral funny animal clips (cats, dogs, "
+        "pets, wild animals; now and then an AI brainrot clip) with its own comedy twist.\n"
         f"{seen}Source title: {c['title']}\nSource description: {c['description'][:300]}\n"
         f"Tags: {', '.join(c['tags'][:12])}\n\n"
         "Base everything on what happens. Reply with ONLY a JSON object:\n"
@@ -361,6 +364,9 @@ def cycle(state, config, run_now=False, yt=None):
     yt = yt or sc.youtube()
     own_channel = sc.read(ROOT / 'channel.json', {}).get('channel_id')
 
+    if animal.get('ready'):  # a finished clip waits for its posting slot (direct-to-public mode)
+        return publish_ready(yt, state, config, animal)
+
     if held:  # 1. a private upload is waiting for YouTube's copyright verdict
         item = (yt.videos().list(part='status,contentDetails', id=held['video_id']).execute().get('items') or [None])[0]
         result = verdict(item)
@@ -402,7 +408,8 @@ def cycle(state, config, run_now=False, yt=None):
     if not run_now and time.time() - animal.get('last_cycle_at', 0) < config.get('scan_minutes', 240) * 60:
         return {'status': 'cycle_not_due'}
     wait = youtube_rules.spacing_wait(state, config)
-    if wait and not run_now and wait - time.time() > (cfg['check_minutes'] + 60) * 60:
+    lead = cfg['check_minutes'] + 60 if cfg['private_first'] else cfg['ready_lead_minutes']
+    if wait and not run_now and wait - time.time() > lead * 60:
         return {'status': 'cycle_not_due', 'until': wait}
     animal['last_cycle_at'] = time.time()
     number = animal['cycles']
@@ -454,7 +461,12 @@ def cycle(state, config, run_now=False, yt=None):
         meta = {'seen': c.get('seen', ''), 'title': twist['title'], 'description': description(c, twist), 'twist': twist,
                 'source': source, 'duration_seconds': duration}
         sc.save(folder / 'metadata.json', meta)
-        return upload_private(yt, video, meta, digest, state, animal, c)
+        if cfg['private_first']:
+            return upload_private(yt, video, meta, digest, state, animal, c)
+        animal['used'].append(c['id'])
+        animal['ready'] = {'file': str(video), 'sha256': digest, 'source': source, 'title': meta['title'][:100]}
+        sc.save(sc.WORK / 'state.json', state)
+        return publish_ready(yt, state, config, animal)
     sc.save(sc.WORK / 'state.json', state)
     sc.progress(state, 'queued', f'No usable Short for "{query}" this cycle')
     return {'status': 'no_quality_clip', 'query': query, 'errors': errors[-5:]}
@@ -474,6 +486,61 @@ def crosspost_facebook(record, state):
     return record.get('facebook')
 
 
+def insert(yt, video, meta, privacy):
+    from googleapiclient.http import MediaFileUpload
+    return yt.videos().insert(part='snippet,status', body={
+        'snippet': {'title': meta['title'][:100], 'description': meta['description'], 'categoryId': CATEGORY,
+                    'tags': ['funny animals', 'funny animal video', 'animals', 'Shorts', 'Shotsnip']},
+        'status': {'privacyStatus': privacy, 'selfDeclaredMadeForKids': False}},
+        media_body=MediaFileUpload(str(video), mimetype='video/mp4', resumable=True)).execute(num_retries=0)['id']
+
+
+def publish_ready(yt, state, config, animal):
+    """Direct mode: upload the finished clip with the owner's privacy (public) once the posting rules allow."""
+    import scheduled_clips as sc
+    import youtube_rules
+    ready = animal['ready']
+    video = Path(ready['file'])
+    if not video.is_file():
+        animal.pop('ready')
+        sc.save(sc.WORK / 'state.json', state)
+        return {'status': 'dropped', 'reason': 'finished clip file is missing'}
+    try:
+        youtube_rules.check(ready['source'], ready['title'], state, config, ROOT)
+    except youtube_rules.RuleHold as hold:
+        if hold.kind == 'spacing':
+            sc.progress(state, 'queued', 'Finished animal Short waits for its slot; ' + str(hold))
+            return {'status': 'held_clip_waiting', 'until': hold.wait_until}
+        animal.pop('ready')
+        sc.progress(state, 'queued', f'Finished clip dropped: {hold}')
+        return {'status': 'dropped', 'reason': str(hold)}
+    meta = sc.read(video.parent / 'metadata.json', {})
+    privacy = sc.setting(config, 'privacy')
+    record = {'operation': uuid.uuid4().hex, 'status': 'pending', 'started_at': sc.now(), 'file': str(video),
+              'sha256': ready['sha256'], 'source': ready['source'], 'title': ready['title']}
+    state.setdefault('uploads', []).append(record)
+    animal.pop('ready')
+    sc.save(sc.WORK / 'state.json', state)
+    sc.progress(state, 'uploading', f'Uploading "{ready["title"]}" ({privacy})')
+    try:
+        video_id = insert(yt, video, meta, privacy)
+    except Exception as exc:
+        from googleapiclient.errors import HttpError
+        rejected = isinstance(exc, HttpError) and 400 <= exc.resp.status < 500 and exc.resp.status != 408
+        record['status'] = 'rejected' if rejected else 'uncertain'
+        sc.save(sc.WORK / 'state.json', state)
+        if rejected:
+            raise RuntimeError(f'YouTube rejected upload (HTTP {exc.resp.status})') from None
+        raise RuntimeError('Upload response uncertain. Publishing held to prevent duplicates; reconcile channel uploads.') from None
+    record.update(status='uploaded', video_id=video_id, finished_at=sc.now(), requested_privacy=privacy)
+    state['last_upload_at'] = state['last_youtube_upload_at'] = time.time()
+    sc.save(sc.WORK / 'state.json', state)
+    if privacy == 'public':
+        crosspost_facebook(record, state)
+    sc.progress(state, 'published', f"Published \"{ready['title']}\" (credit: {ready['source']['channel']})")
+    return {'status': 'published', 'video_id': video_id, 'facebook': (record.get('facebook') or {}).get('status')}
+
+
 def upload_private(yt, video, meta, digest, state, animal, c):
     import scheduled_clips as sc
     from googleapiclient.http import MediaFileUpload
@@ -486,7 +553,7 @@ def upload_private(yt, video, meta, digest, state, animal, c):
     try:
         result = yt.videos().insert(part='snippet,status', body={
             'snippet': {'title': meta['title'][:100], 'description': meta['description'], 'categoryId': CATEGORY,
-                        'tags': ['funny animals', 'animals', 'brainrot', 'Shorts', 'Shotsnip']},
+                        'tags': ['funny animals', 'funny animal video', 'animals', 'Shorts', 'Shotsnip']},
             'status': {'privacyStatus': 'private', 'selfDeclaredMadeForKids': False}},
             media_body=MediaFileUpload(str(video), mimetype='video/mp4', resumable=True)).execute(num_retries=0)
     except Exception as exc:
