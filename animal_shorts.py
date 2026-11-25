@@ -169,17 +169,37 @@ def describe_clip(src, model, frames=4):
         return ''
 
 
-def twist_prompt(c):
+# Shotsnip titles stay broad ("funny animal clips", "ragebaiting pets"), never naming the species or a narrow
+# detail, so one title style fits the whole channel. A title naming any of these is redrafted.
+SPECIFIC_ANIMALS = set('''cat kitten kitty kittens cats dog dogs puppy puppies pup pups doggo doggos pupper husky corgi
+retriever labrador poodle chihuahua pug beagle shiba goat goats cow cows calf horse horses pony donkey parrot parrots
+bird birds duck ducks goose geese chicken chickens rooster hen capybara capybaras monkey monkeys gorilla raccoon
+raccoons hamster hamsters rabbit rabbits bunny bunnies bear bears lion lions tiger tigers fox foxes pig pigs piglet
+sheep lamb frog frogs otter otters penguin penguins seal seals elephant elephants giraffe giraffes squirrel squirrels
+ferret ferrets lizard lizards snake snakes owl owls hedgehog hedgehogs panda pandas deer kangaroo koala sloth crab
+fish shark dolphin whale turtle tortoise alpaca llama camel zebra hippo rhino crow cockatoo mouse mice rat rats'''.split())
+
+TITLE_STYLE = (
+    '"title": "a broad, catchy scroll-stopping title, 25-60 chars, in the style of a channel that posts funny animal '
+    'clips: say animals, pets, this little guy, furballs or the gang, NEVER the species or breed (no cat, dog, goat, '
+    'parrot...) and no narrow details of the clip; carry it with an energy word or a punchline about the vibe '
+    '(e.g. Ragebaiting pets be like 😭 / Funny animals with zero chill / Pets were NOT having it today / '
+    'This little guy chose violence / Animals that woke up and chose chaos), max one emoji at the end, '
+    'NOT the source title, no hashtags, and worded differently from the recent titles listed above"'
+)
+
+
+def twist_prompt(c, avoid=()):
     seen = f"What happens (seen in the frames): {c['seen']}\n" if c.get('seen') else ''
+    recent = ('Recent Shotsnip titles (do not repeat their wording):\n' + '\n'.join(f'- {t}' for t in avoid) + '\n'
+              if avoid else '')
     return (
         "You are the writer for Shotsnip, a Shorts channel that re-shares viral funny animal clips (cats, dogs, "
         "pets, wild animals; now and then an AI brainrot clip) with its own comedy twist.\n"
         f"{seen}Source title: {c['title']}\nSource description: {c['description'][:300]}\n"
-        f"Tags: {', '.join(c['tags'][:12])}\n\n"
-        "Base everything on what happens. Reply with ONLY a JSON object:\n"
-        '{"title": "a catchy scroll-stopping hook title, 35-70 chars: curiosity, surprise or a punchline '
-        '(e.g. This cat had ONE job 😭 / Nobody expected the goat to do THIS), says what happens, '
-        'max one emoji at the end, NOT the source title, no hashtags",\n'
+        f"Tags: {', '.join(c['tags'][:12])}\n{recent}\n"
+        "Base the hook, voice line and captions on what happens. Reply with ONLY a JSON object:\n"
+        '{' + TITLE_STYLE + ',\n'
         ' "hook": "<= 7 words of on-screen text for the top of the video",\n'
         ' "voice_line": "<= 12 words, the animal\'s funny inner thoughts or a punchy reaction, spoken at the start",\n'
         ' "captions": ["2 or 3 short GENERIC lines, <= 6 words each, that fit the whole clip and never describe '
@@ -187,6 +207,11 @@ def twist_prompt(c):
         'Cats are built different; may name one or two animals that appear"],\n'
         ' "hashtags": ["3 to 5 hashtags like #funnyanimals"]}'
     )
+
+
+def too_specific(title):
+    """The species words in a title, which keep it from being a broad Shotsnip title."""
+    return sorted({w for w in re.findall(r"[a-z]+", str(title).casefold()) if w in SPECIFIC_ANIMALS})
 
 
 def clean_twist(raw, c):
@@ -202,19 +227,28 @@ def clean_twist(raw, c):
     }
     if not twist['title'] or twist['title'].casefold() == c['title'].casefold():
         raise ValueError('twist title missing or copies the source title')
+    named = too_specific(twist['title'])
+    if named:
+        raise ValueError(f"twist title names a specific animal ({', '.join(named)}); titles stay broad")
     if not twist['hook'] or not twist['voice_line'] or len(twist['captions']) < 2:
         raise ValueError('twist is missing its hook, voice line or captions')
     twist['hashtags'] = [t for t in twist['hashtags'] if len(t) > 1] or ['#funnyanimals']
     return twist
 
 
-def write_twist(c, ask=None, tries=3):
+def write_twist(c, ask=None, tries=4, avoid=(), check=None):
+    """check(title) returns a problem or None; a title the upload rules would refuse is redrafted here, so the
+    downloaded clip is not wasted on a vague or repeated title."""
     if ask is None:
         from commentary import _ask as ask
     last = None
     for _ in range(tries):
         try:
-            return clean_twist(ask(twist_prompt(c)), c)
+            twist = clean_twist(ask(twist_prompt(c, avoid)), c)
+            problem = check(twist['title']) if check else None
+            if problem:
+                raise ValueError(problem)
+            return twist
         except Exception as exc:  # a weak draft is redrafted, never published
             last = exc
     raise RuntimeError(f'Could not write a usable twist: {last}')
@@ -440,10 +474,8 @@ def cycle(state, config, run_now=False, yt=None):
             src = download(c, folder)
             sc.progress(state, 'finishing', 'Writing the twist and recording the voice reaction')
             c['seen'] = describe_clip(src, cfg['vision_model'])
-            twist = write_twist(c)
-            problem = youtube_rules.title_problem(twist['title'], source, state, config, ROOT)
-            if problem:
-                raise RuntimeError(problem)
+            twist = write_twist(c, avoid=youtube_rules.recent_titles(state, ROOT, 8)[-8:],
+                                check=lambda t: youtube_rules.title_problem(t, source, state, config, ROOT))
             from commentary import speak
             voice = (config.get('commentary') or {}).get('voice') or 'en-US-AndrewMultilingualNeural'
             voice_seconds, _ = speak(twist['voice_line'], folder / 'voice.mp3', voice)
