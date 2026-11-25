@@ -2,6 +2,7 @@ from pathlib import Path
 import unittest
 
 import animal_shorts as a
+import youtube_rules
 
 
 def video(vid, views, seconds='PT20S', channel='C1', kids=False):
@@ -49,7 +50,7 @@ class LongForm(unittest.TestCase):
 
 
 class Twist(unittest.TestCase):
-    good = {'title': 'Cat discovers gravity the hard way', 'hook': 'He did NOT see that coming',
+    good = {'title': 'This little guy discovered gravity the hard way', 'hook': 'He did NOT see that coming',
             'voice_line': 'I meant to do that. Totally meant to.', 'captions': ['confidence: 100', 'skill: 0'],
             'hashtags': ['#funnycats', 'cats']}
 
@@ -64,6 +65,26 @@ class Twist(unittest.TestCase):
         self.assertEqual(a.write_twist(SOURCE, ask=lambda _p: next(drafts))['title'], self.good['title'])
         with self.assertRaises(RuntimeError):
             a.write_twist(SOURCE, ask=lambda _p: {'title': 'funny animal video'})
+
+    def test_titles_stay_broad_and_never_name_the_species(self):
+        drafts = iter([{**self.good, 'title': 'Goat headbutts the farmer 😭'},
+                       {**self.good, 'title': 'Two puppies vs one sock'},
+                       {**self.good, 'title': 'Ragebaiting pets be like 😭'}])
+        self.assertEqual(a.write_twist(SOURCE, ask=lambda _p: next(drafts))['title'], 'Ragebaiting pets be like 😭')
+        self.assertEqual(a.too_specific('My CATS and the dog'), ['cats', 'dog'])
+        self.assertEqual(a.too_specific('Animals that chose chaos today'), [])
+        self.assertIn('NEVER the species', a.twist_prompt(SOURCE))
+
+    def test_recent_titles_are_shown_and_rule_refusals_are_redrafted(self):
+        prompts, drafts = [], iter([{**self.good, 'title': 'Funny animal clips 😂'}, dict(self.good)])
+        def ask(prompt):
+            prompts.append(prompt)
+            return next(drafts)
+        def check(title):  # the real upload rule: broad words alone do not say anything
+            return youtube_rules.title_problem(title, SOURCE, {}, {}, Path('/nonexistent'))
+        twist = a.write_twist(SOURCE, ask=ask, avoid=['Pets were NOT having it today'], check=check)
+        self.assertEqual(twist['title'], self.good['title'])
+        self.assertIn('- Pets were NOT having it today', prompts[0])
 
     def test_overlay_has_hook_voice_line_and_captions(self):
         ass = a.overlay_ass(a.clean_twist(self.good, SOURCE), duration=8.0, voice_seconds=2.5)

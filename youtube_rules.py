@@ -4,7 +4,9 @@ YouTube stopped recommending the channel on 2026-11-21 after four uploads in one
 followed by many near-identical "Kai Cenat Live | GTA 6 | ..." titles from one stream. These rules stop that:
   - spacing:   at least `min_gap_minutes` between YouTube uploads, and at most `max_per_day` in any 24 hours
   - variety:   never the same streamer twice in a row, nor within `same_streamer_hours`
-  - titles:    each title must describe the moment, and must not repeat or nearly repeat a recent title
+  - titles:    each title must describe the moment, and must not repeat or nearly repeat a recent title.
+               Broad animal words (funny, animals, pets) do not count, so "Funny animal clips" every time is refused
+               while "Pets were NOT having it today" next to "This little guy chose violence" is fine.
 Settings live in scheduler.json under "youtube_rules" and are set from Studio HQ (owner_settings.py).
 """
 import json
@@ -17,7 +19,8 @@ from owner_settings import DEFAULTS as _OWNER
 DEFAULTS = {k.split('.', 1)[1]: v for k, v in _OWNER.items() if k.startswith('youtube_rules.')}
 FILLER = set('''a an the of in on at to and or with his her their its is are was it this that s
 live moment moments reaction reacts reacting highlight highlights stream streams streamer streaming gameplay clip clips
-game gaming gta grand theft auto v vi 5 6 playing plays played progress update day early access'''.split())
+game gaming gta grand theft auto v vi 5 6 playing plays played progress update day early access
+funny animal animals pet pets video videos compilation shorts'''.split())  # Shotsnip's broad words: the hook must differ
 
 
 class RuleHold(RuntimeError):
