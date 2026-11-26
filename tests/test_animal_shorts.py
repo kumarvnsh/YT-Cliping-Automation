@@ -58,7 +58,16 @@ class Twist(unittest.TestCase):
         twist = a.write_twist(SOURCE, ask=lambda _p: dict(self.good))
         self.assertEqual(twist['hashtags'], ['#funnycats', '#cats'])
         text = a.description(SOURCE, twist)
-        self.assertIn('Credit: The Living Planet - https://www.youtube.com/shorts/dioC4sSuJUE', text)
+        self.assertNotIn('http', text)
+        self.assertNotIn(SOURCE['url'], text)
+        lines = text.split('\n')
+        self.assertEqual(lines[0], self.good['hook'])
+        self.assertEqual(lines[2], '#funnyanimals #funnycats #cats #shorts')
+        self.assertEqual(lines[3:3 + a.SPACER_LINES], ['.'] * a.SPACER_LINES)
+        self.assertEqual(lines[-2], 'Credit: The Living Planet')
+        self.assertTrue(lines[-1].startswith('Original video by The Living Planet.'))
+        from public_metadata import description as clean  # the Facebook cleaner keeps the spacer column
+        self.assertEqual(clean(text), text)
 
     def test_copied_title_or_missing_parts_are_redrafted(self):
         drafts = iter([{**self.good, 'title': 'Funny Animal Video'}, {**self.good, 'captions': ['one']}, self.good])

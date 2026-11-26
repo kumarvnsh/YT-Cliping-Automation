@@ -6,7 +6,7 @@ Each scheduler tick does at most one of:
      or quarantine it (kept private) when YouTube rejects or blocks it;
   2. otherwise, when a cycle is due: find the most-viewed matching Short not used yet, add the twist
      (hook text, a spoken reaction, funny captions), and upload it PRIVATE for the copyright check.
-The original creator is always credited in the description, with a link to their video.
+The original creator is always credited by channel name at the bottom of the description (no link).
 """
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -254,13 +254,19 @@ def write_twist(c, ask=None, tries=4, avoid=(), check=None):
     raise RuntimeError(f'Could not write a usable twist: {last}')
 
 
+SPACER_LINES = 14  # a column of "." lines pushes the credit below the fold on YouTube and Facebook
+
+
 def description(c, twist):
-    tags = ' '.join(dict.fromkeys(twist['hashtags'] + ['#shorts', '#funnyanimals']))
+    """Hook, hashtags, then the credit at the very bottom. The credit names the original channel only, no link."""
+    tags = ' '.join(dict.fromkeys(['#funnyanimals'] + twist['hashtags'] + ['#shorts']))
+    spacer = '\n'.join(['.'] * SPACER_LINES)
     return (f"{twist['hook']}\n\n"
-            f"Credit: {c['channel']} - {c['url']}\n"
+            f"{tags}\n"
+            f"{spacer}\n\n"
+            f"Credit: {c['channel']}\n"
             f"Original video by {c['channel']}. All rights belong to the original creator; "
-            "Shotsnip adds its own commentary and edit. Creators: contact us for credit changes or removal.\n\n"
-            f"{tags}")
+            "Shotsnip adds its own commentary and edit. Creators: contact us for credit changes or removal.")
 
 
 # ---------- render ----------
@@ -510,7 +516,10 @@ def crosspost_facebook(record, state):
     import scheduled_clips as sc
     video = Path(record['file'])
     meta = sc.read(video.parent / 'metadata.json', {})
-    fb.crosspost(record, video, record.get('title', ''), meta.get('description', ''), ROOT)
+    text = meta.get('description', '')
+    if meta.get('twist') and (meta.get('source') or {}).get('channel'):
+        text = description(meta['source'], meta['twist'])  # clips made before the credit change get the new layout too
+    fb.crosspost(record, video, record.get('title', ''), text, ROOT)
     sc.save(sc.WORK / 'state.json', state)
     if meta:
         meta.update(uploaded=True, uploaded_video_id=record.get('video_id'), facebook=record.get('facebook'))
