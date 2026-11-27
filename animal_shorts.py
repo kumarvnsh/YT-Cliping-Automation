@@ -4,8 +4,9 @@ Turned on by "niche": "animals" in scheduler.json (Studio HQ > Posting rules > C
 Each scheduler tick does at most one of:
   1. a held private upload: check YouTube's verdict; publish it when clean and the posting rules allow,
      or quarantine it (kept private) when YouTube rejects or blocks it;
-  2. otherwise, when a cycle is due: find the most-viewed matching Short not used yet, add the twist
-     (hook text, a spoken reaction, funny captions), and upload it PRIVATE for the copyright check.
+  2. otherwise, when a cycle is due: find the most-viewed matching Short not used yet, re-cut it full screen
+     9:16 with its own sound (no narration, no blurred frame), add one short line of text at the bottom center
+     for the first few seconds, and upload it.
 The original creator is always credited by channel name at the bottom of the description (no link).
 """
 from datetime import datetime, timedelta, timezone
@@ -50,6 +51,9 @@ DEFAULTS = {
     'long_min_views': 500_000,
     'long_clip_seconds': 30,
     'vision_model': 'qwen3-vl:4b-instruct',
+    # Owner (27 Nov): no spoken intro and no blurred frame. The clip fills the 9:16 screen and one short line of
+    # text sits at the bottom center for the first few seconds. 0 = no text at all.
+    'caption_seconds': 5,
 }
 
 
@@ -105,7 +109,8 @@ def rank(items, used, own_channel, cfg, subscribers=None, long=False, avoid_chan
         title = v['snippet'].get('title', '')
         if (subscribers.get(cid, 0) > cfg['max_channel_subscribers']
                 or str(v['snippet'].get('channelTitle', '')).strip().casefold() in skip or cid in skip
-                or any(w in title.casefold() for w in bad_words)):
+                or any(w in title.casefold() for w in bad_words)
+                or synthetic_words(title, v['snippet'].get('description', ''), v['snippet'].get('tags'))):
             continue
         stats, status = v.get('statistics', {}), v.get('status', {})
         seconds = parse_duration(v.get('contentDetails', {}).get('duration'))
@@ -123,6 +128,18 @@ def rank(items, used, own_channel, cfg, subscribers=None, long=False, avoid_chan
                     'long': long, 'url': (f"https://www.youtube.com/watch?v={v['id']}" if long
                                           else f"https://www.youtube.com/shorts/{v['id']}")})
     return sorted(out, key=lambda c: c['score'], reverse=True)
+
+
+# Words a cartoon or AI-made "animal" clip gives itself away with in its title, description or tags.
+SYNTHETIC_WORDS = set('''ai aiart aivideo aivideos aigenerated aianimation aianimals aicat aicats aidog aidogs aipets
+aistory aishorts animation animations animated animator cartoon cartoons cartoony cgi pixar 3danimation
+sora veo veo3 kling klingai midjourney hailuo runwayml'''.split())
+
+
+def synthetic_words(title, description='', tags=()):
+    """The words that mark a source as a cartoon or AI-generated clip, not real footage (empty when none)."""
+    text = ' '.join([str(title or ''), str(description or '')[:500], ' '.join(map(str, tags or []))]).casefold()
+    return sorted(set(re.findall(r"[a-z0-9]+", text)) & SYNTHETIC_WORDS)
 
 
 def discover(yt, cfg, cycle, used, own_channel, long=False, avoid_channels=()):
@@ -180,8 +197,12 @@ def long_window(c, cfg):
 # ---------- twist ----------
 
 def describe_clip(src, model, frames=4):
-    """What actually happens in the clip, from a local vision model looking at a few frames ('' if unavailable)."""
+    """What happens in the clip and whether it is real camera footage, from a local vision model.
+
+    Returns {'seen': '3 sentences', 'footage': 'real' | 'cartoon' | 'ai' | 'game' | ''}; both are '' when the
+    model is unavailable, so a missing model never blocks a clip."""
     import base64
+    import json
     import requests
     from commentary import media_seconds
     from live_clipper import ffmpeg
@@ -195,16 +216,41 @@ def describe_clip(src, model, frames=4):
             if r.stdout:
                 images.append(base64.b64encode(r.stdout).decode())
         if not images:
-            return ''
+            return {'seen': '', 'footage': ''}
         response = requests.post('http://127.0.0.1:11434/api/generate', json={
-            'model': model, 'images': images, 'stream': False, 'keep_alive': '60s',
-            'prompt': ('These are frames, in order, from one short funny video. In at most 3 sentences, say what '
-                       'happens: which animals or characters, what they do, and the funny moment. Plain facts only.'),
-            'options': {'temperature': 0.2, 'num_predict': 160, 'num_ctx': 8192}}, timeout=240)
+            'model': model, 'images': images, 'stream': False, 'keep_alive': '60s', 'format': 'json',
+            'prompt': ('These are frames, in order, from one short funny video. Reply with ONLY a JSON object:\n'
+                       '{"what": "at most 3 sentences: which animals or characters, what they do, and the funny '
+                       'moment. Plain facts only.",\n'
+                       ' "footage": "real" if this is real camera footage of real animals; "cartoon" if it is a '
+                       'drawn, 2D or 3D animation (Pixar-like characters, big glossy eyes, toy-like colours); "ai" if '
+                       'it looks AI-generated (too smooth, melting details, impossible scenes); "game" if it is a '
+                       'video game}'),
+            'options': {'temperature': 0.1, 'num_predict': 220, 'num_ctx': 8192}}, timeout=240)
         response.raise_for_status()
-        return ' '.join(response.json().get('response', '').split())[:600]
+        raw = response.json().get('response', '')
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = {'what': raw}
+        seen = ' '.join(str(data.get('what') or '').split())[:600]
+        footage = str(data.get('footage') or '').strip().casefold()
+        return {'seen': seen, 'footage': footage if footage in ('real', 'cartoon', 'ai', 'game') else ''}
     except Exception:
-        return ''
+        return {'seen': '', 'footage': ''}
+
+
+def real_footage(look):
+    """None when the clip may be posted, else why not. Shotsnip posts real animals only: a cartoon, an AI clip
+    or a game is refused even when it shows an animal, and so is a clip whose description names no animal."""
+    if look.get('footage') in ('cartoon', 'ai', 'game'):
+        return f"not real footage ({look['footage']}): {look.get('seen', '')[:100]}"
+    fake = synthetic_words(look.get('seen', ''))  # the model said "animated" or "cartoon" in its own words
+    if fake:
+        return f"not real footage ({', '.join(fake)}): {look.get('seen', '')[:100]}"
+    if not shows_animals(look.get('seen')):
+        return 'no animals in the clip: ' + look.get('seen', '')[:120]
+    return None
 
 
 # Shotsnip titles stay broad ("funny animal clips", "ragebaiting pets"), never naming the species or a narrow
@@ -233,16 +279,14 @@ def twist_prompt(c, avoid=()):
               if avoid else '')
     return (
         "You are the writer for Shotsnip, a Shorts channel that re-shares viral funny animal clips (cats, dogs, "
-        "pets, farm and wild animals) with its own comedy twist.\n"
+        "pets, farm and wild animals), full screen with one short line of text.\n"
         f"{seen}Source title: {c['title']}\nSource description: {c['description'][:300]}\n"
         f"Tags: {', '.join(c['tags'][:12])}\n{recent}\n"
-        "Base the hook, voice line and captions on what happens. Reply with ONLY a JSON object:\n"
+        "Base the hook on what happens. Reply with ONLY a JSON object:\n"
         '{' + TITLE_STYLE + ',\n'
-        ' "hook": "<= 7 words of on-screen text for the top of the video",\n'
-        ' "voice_line": "<= 12 words, the animal\'s funny inner thoughts or a punchy reaction, spoken at the start",\n'
-        ' "captions": ["2 or 3 short GENERIC lines, <= 6 words each, that fit the whole clip and never describe '
-        'a specific moment, e.g. Funny animal video 😂 / The ultimate brainrot / Wait for the end... / '
-        'Cats are built different; may name one or two animals that appear"],\n'
+        ' "hook": "2 to 6 words of on-screen text shown at the bottom of the video for the first seconds: a '
+        'teaser that makes people keep watching without spoiling the moment, e.g. Wait for it... / He was so '
+        'confident / Nobody expected this",\n'
         ' "hashtags": ["3 to 5 hashtags like #funnyanimals"]}'
     )
 
@@ -271,9 +315,7 @@ def clean_twist(raw, c):
         return text if len(text) <= chars else text[:chars].rsplit(' ', 1)[0].strip()
     twist = {
         'title': short(raw.get('title'), 14, 80),
-        'hook': short(raw.get('hook'), 7, 48),
-        'voice_line': short(raw.get('voice_line'), 12, 90),
-        'captions': [short(x, 7, 48) for x in (raw.get('captions') or []) if str(x).strip()][:3],
+        'hook': short(raw.get('hook'), 7, 40),
         'hashtags': [('#' + re.sub(r'[^A-Za-z0-9]', '', str(t))) for t in (raw.get('hashtags') or [])][:5],
     }
     if not twist['title'] or twist['title'].casefold() == c['title'].casefold():
@@ -281,8 +323,8 @@ def clean_twist(raw, c):
     named = too_specific(twist['title'])
     if named:
         raise ValueError(f"twist title names a specific animal ({', '.join(named)}); titles stay broad")
-    if not twist['hook'] or not twist['voice_line'] or len(twist['captions']) < 2:
-        raise ValueError('twist is missing its hook, voice line or captions')
+    if not twist['hook']:
+        raise ValueError('twist is missing its hook')
     twist['hashtags'] = [t for t in twist['hashtags'] if len(t) > 1] or ['#funnyanimals']
     return twist
 
@@ -334,25 +376,25 @@ def _stamp(seconds):
     return f'{h}:{m:02}:{s:02}.{c:02}'
 
 
-def overlay_ass(twist, duration, voice_seconds):
-    """Hook on top for the whole clip; captions spread over the time after the spoken reaction."""
-    head = ('[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[V4+ Styles]\n'
+# Shorts and Reels cover the bottom ~22% (title, channel, caption) and a column of buttons on the right. The text
+# sits just above that band, centered, with side margins wide enough to clear the button rail.
+TEXT_BOTTOM_MARGIN = 470
+TEXT_SIDE_MARGIN = 150
+
+
+def overlay_ass(twist, duration, caption_seconds=5):
+    """One short line at the bottom center for the opening seconds, fading out. None when there is no text."""
+    if not caption_seconds or not twist.get('hook'):
+        return None
+    end = min(duration, float(caption_seconds))
+    head = ('[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 0\n\n[V4+ Styles]\n'
             'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, '
             'Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, '
             'Alignment, MarginL, MarginR, MarginV, Encoding\n'
-            'Style: Hook,Arial Black,72,&H0000FFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,7,2,8,50,50,50,1\n'
-            'Style: Cap,Arial Black,58,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,6,2,2,50,50,40,1\n\n'
+            f'Style: Hook,Arial Black,64,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,6,3,2,'
+            f'{TEXT_SIDE_MARGIN},{TEXT_SIDE_MARGIN},{TEXT_BOTTOM_MARGIN},1\n\n'
             '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n')
-    lines = [f"Dialogue: 1,{_stamp(0)},{_stamp(duration)},Hook,,0,0,0,,{_ass_escape(twist['hook'].upper())}"]
-    lines.append(f"Dialogue: 1,{_stamp(0)},{_stamp(voice_seconds)},Cap,,0,0,0,,{_ass_escape(twist['voice_line'])}")
-    caps = twist['captions']
-    start = min(voice_seconds, max(0.0, duration - 1.5 * len(caps)))
-    step = max(1.2, (duration - start) / len(caps))
-    for i, text in enumerate(caps):
-        a, b = start + i * step, min(duration, start + (i + 1) * step)
-        if b - a >= 0.6:
-            lines.append(f"Dialogue: 1,{_stamp(a)},{_stamp(b)},Cap,,0,0,0,,{_ass_escape(text)}")
-    return head + '\n'.join(lines) + '\n'
+    return head + f"Dialogue: 1,{_stamp(0)},{_stamp(end)},Hook,,0,0,0,,{{\\fad(150,400)}}{_ass_escape(twist['hook'])}\n"
 
 
 def has_audio(path):
@@ -361,35 +403,123 @@ def has_audio(path):
         return bool(media.streams.audio)
 
 
-def render(src, voice, voice_seconds, twist, folder):
-    """1080x1920: blurred fill behind the fitted clip, overlays, voice over ducked original audio."""
+def video_size(path):
+    """Display width and height of the first video stream (pixel aspect applied)."""
+    import av
+    with av.open(str(path)) as media:
+        stream = media.streams.video[0]
+        width, height = stream.codec_context.width, stream.codec_context.height
+        sar = stream.sample_aspect_ratio
+        if sar and sar.numerator and sar.denominator:
+            width = round(width * sar.numerator / sar.denominator)
+        return width, height
+
+
+def motion_columns(src, seconds, cols=96, rows=54, fps=3):
+    """How much changes in each column of the frame over the clip (sum of frame-to-frame differences).
+
+    Low-res grey frames through ffmpeg, so it needs no numpy or OpenCV. Empty list when ffmpeg fails."""
+    from live_clipper import ffmpeg
+    r = subprocess.run([ffmpeg(), '-v', 'error', '-t', f'{seconds:.2f}', '-i', str(src),
+                        '-vf', f'fps={fps},scale={cols}:{rows},format=gray', '-f', 'rawvideo', '-'],
+                       capture_output=True, timeout=180)
+    size = cols * rows
+    data = r.stdout
+    if r.returncode != 0 or len(data) < 2 * size:
+        return []
+    energy = [0] * cols
+    previous = data[:size]
+    for start in range(size, len(data) - size + 1, size):
+        frame = data[start:start + size]
+        for i in range(size):
+            d = frame[i] - previous[i]
+            energy[i % cols] += d if d > 0 else -d
+        previous = frame
+    return energy
+
+
+def subject_center(columns, keep):
+    """Horizontal center (0..1) of the `keep`-wide window holding the most motion.
+
+    Falls back to the middle when there is too little motion to judge, and prefers the middle on near ties,
+    so a calm or evenly busy clip is simply center-cropped."""
+    if not columns or keep >= 1:
+        return 0.5
+    cols = len(columns)
+    width = max(1, round(keep * cols))
+    total = sum(columns)
+    if total <= 0:
+        return 0.5
+    best, best_score = (cols - width) // 2, -1.0
+    for start in range(cols - width + 1):
+        share = sum(columns[start:start + width]) / total
+        center = (start + width / 2) / cols
+        score = share - 0.15 * abs(center - 0.5)  # a small pull toward the middle
+        if score > best_score:
+            best, best_score = start, score
+    return (best + width / 2) / cols
+
+
+def fill_filter(width, height, center=0.5, out_w=1080, out_h=1920):
+    """ffmpeg filter that fills the whole 9:16 frame: crop the source to 9:16 around `center`, then scale.
+
+    A wider source is cut at the sides around the action; a taller one is cut at top and bottom evenly."""
+    target = out_w / out_h
+    if width / height > target + 0.01:  # wider than 9:16 (landscape, square, 4:5...)
+        crop_w = min(width, int(height * target) // 2 * 2)
+        x = int(min(max(center * width - crop_w / 2, 0), width - crop_w)) // 2 * 2
+        crop = f'crop={crop_w}:{height}:{x}:0'
+    elif width / height < target - 0.01:  # taller than 9:16
+        crop_h = min(height, int(width / target) // 2 * 2)
+        crop = f'crop={width}:{crop_h}:0:{(height - crop_h) // 4 * 2}'
+    else:
+        crop = None
+    scale = f'scale={out_w}:{out_h}:flags=lanczos'
+    return f'{crop},{scale}' if crop else scale
+
+
+def framing(src, seconds):
+    """The crop for this clip plus how it was picked, kept in metadata."""
+    width, height = video_size(src)
+    keep = (height * 1080 / 1920) / width
+    if keep >= 0.99:
+        return fill_filter(width, height), {'mode': 'fill', 'source': [width, height]}
+    try:
+        center = subject_center(motion_columns(src, seconds), keep)
+        mode = 'subject'
+    except Exception:  # ffmpeg missing or timed out: a plain center crop still fills the screen
+        center, mode = 0.5, 'center'
+    return fill_filter(width, height, center), {'mode': mode, 'center': round(center, 3), 'source': [width, height]}
+
+
+def render(src, twist, folder, caption_seconds=5):
+    """1080x1920 full screen: the clip cropped to fill 9:16, its own sound, and one bottom-center line of text."""
     from commentary import media_seconds
     from live_clipper import ffmpeg
-    clip_seconds = min(media_seconds(src), MAX_SECONDS)
-    duration = min(MAX_SECONDS, max(clip_seconds, voice_seconds + 0.6))
-    hold = max(0.0, duration - clip_seconds)
-    (folder / 'overlay.ass').write_text(overlay_ass(twist, duration, voice_seconds), encoding='utf-8')
+    duration = min(media_seconds(src), MAX_SECONDS)
+    fill, frame_info = framing(src, duration)
+    ass = overlay_ass(twist, duration, caption_seconds)
+    chain = f'[0:v]{fill},fps=30,setsar=1'
+    if ass:
+        (folder / 'overlay.ass').write_text(ass, encoding='utf-8')
+        chain += ',ass=overlay.ass'
+    graph = chain + '[out];'
     fmt = 'aformat=sample_rates=48000:channel_layouts=stereo'
-    graph = ('[0:v]split[a][b];'
-             '[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:2,eq=brightness=-0.12[bg];'
-             '[b]scale=1080:1420:force_original_aspect_ratio=decrease[fg];'
-             f'[bg][fg]overlay=(W-w)/2:280+(1420-h)/2,tpad=stop_mode=clone:stop_duration={hold:.2f},'
-             'fps=30,ass=overlay.ass,setsar=1[out];'
-             f'[1:a]{fmt},apad[vo];')
+    inputs = ['-i', str(src)]
     if has_audio(src):
-        graph += (f"[0:a]{fmt},volume='if(lt(t,{voice_seconds + 0.2:.2f}),0.22,1)':eval=frame,apad[orig];"
-                  '[orig][vo]amix=inputs=2:duration=longest:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11[aout]')
-    else:
-        graph += '[vo]loudnorm=I=-14:TP=-1.5:LRA=11[aout]'
+        graph += f'[0:a]{fmt},loudnorm=I=-14:TP=-1.5:LRA=11[aout]'
+    else:  # a silent source still gets a (silent) audio track, which Shorts and Reels expect
+        inputs += ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo']
+        graph += f'[1:a]{fmt}[aout]'
     out = folder / 'short.mp4'
-    r = subprocess.run([ffmpeg(), '-y', '-v', 'error', '-i', str(src), '-i', str(voice),
+    r = subprocess.run([ffmpeg(), '-y', '-v', 'error', *inputs,
                         '-filter_complex', graph, '-map', '[out]', '-map', '[aout]', '-t', f'{duration:.2f}',
                         '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p',
                         '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', out.name],
                        cwd=folder, capture_output=True, timeout=600)
     if r.returncode != 0 or not out.is_file():
         raise RuntimeError('Render failed: ' + r.stderr.decode(errors='replace')[-800:])
-    return out, duration
+    return out, duration, frame_info
 
 
 def download(c, folder):
@@ -550,16 +680,15 @@ def cycle(state, config, run_now=False, yt=None):
             twin = library.duplicate_of(hashes, skip=c['id'])
             if twin:  # same footage re-uploaded by another channel: never post it again
                 raise RuntimeError(f'same footage as {twin}, which Shotsnip already used')
-            sc.progress(state, 'finishing', 'Writing the twist and recording the voice reaction')
-            c['seen'] = describe_clip(src, cfg['vision_model'])
-            if not shows_animals(c['seen']):
-                raise RuntimeError('no animals in the clip: ' + c['seen'][:120])
+            sc.progress(state, 'finishing', 'Checking the footage and writing the title')
+            look = describe_clip(src, cfg['vision_model'])
+            c['seen'] = look['seen']
+            problem = real_footage(look)
+            if problem:
+                raise RuntimeError(problem)
             twist = write_twist(c, avoid=youtube_rules.recent_titles(state, ROOT, 8)[-8:],
                                 check=lambda t: youtube_rules.title_problem(t, source, state, config, ROOT))
-            from commentary import speak
-            voice = (config.get('commentary') or {}).get('voice') or 'en-US-AndrewMultilingualNeural'
-            voice_seconds, _ = speak(twist['voice_line'], folder / 'voice.mp3', voice)
-            video, duration = render(src, folder / 'voice.mp3', voice_seconds, twist, folder)
+            video, duration, frame_info = render(src, twist, folder, cfg['caption_seconds'])
         except Exception as exc:  # any per-candidate failure: try the next Short
             if youtube_blocked(exc):  # a temporary bot check / rate limit says nothing about this Short
                 animal['blocked_at'] = time.time()
@@ -571,8 +700,8 @@ def cycle(state, config, run_now=False, yt=None):
             continue
         library.add(c['id'], hashes, channel=c['channel'])
         digest = hashlib.sha256(video.read_bytes()).hexdigest()
-        meta = {'seen': c.get('seen', ''), 'title': twist['title'], 'description': description(c, twist), 'twist': twist,
-                'source': source, 'duration_seconds': duration}
+        meta = {'seen': c.get('seen', ''), 'footage': look['footage'], 'framing': frame_info, 'title': twist['title'],
+                'description': description(c, twist), 'twist': twist, 'source': source, 'duration_seconds': duration}
         sc.save(folder / 'metadata.json', meta)
         if cfg['private_first']:
             return upload_private(yt, video, meta, digest, state, animal, c)
