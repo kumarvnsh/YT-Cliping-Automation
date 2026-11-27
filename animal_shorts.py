@@ -114,7 +114,8 @@ def rank(items, used, own_channel, cfg, subscribers=None, long=False, avoid_chan
         if (subscribers.get(cid, 0) > cfg['max_channel_subscribers']
                 or str(v['snippet'].get('channelTitle', '')).strip().casefold() in skip or cid in skip
                 or any(w in title.casefold() for w in bad_words)
-                or synthetic_words(title, v['snippet'].get('description', ''), v['snippet'].get('tags'))):
+                or synthetic_words(title, v['snippet'].get('description', ''), v['snippet'].get('tags'))
+                or repost_words(title, v['snippet'].get('description', ''), v['snippet'].get('tags'))):
             continue
         stats, status = v.get('statistics', {}), v.get('status', {})
         seconds = parse_duration(v.get('contentDetails', {}).get('duration'))
@@ -144,6 +145,20 @@ def synthetic_words(title, description='', tags=()):
     """The words that mark a source as a cartoon or AI-generated clip, not real footage (empty when none)."""
     text = ' '.join([str(title or ''), str(description or '')[:500], ' '.join(map(str, tags or []))]).casefold()
     return sorted(set(re.findall(r"[a-z0-9]+", text)) & SYNTHETIC_WORDS)
+
+
+# Words that mark a source as a repost from another app or creator, which nearly always carries that app's
+# watermark or the first creator's handle on the video (owner, 28 Nov: no watermarks, no other channel's name).
+REPOST_WORDS = set('''tiktok tiktoks douyin kwai likee snackvideo capcut triller repost reposted reupload
+reuploaded'''.split())
+REPOST_PHRASES = ('credit to', 'credits to', 'cr:', 'dm for credit', 'dm for removal', 'all credits', 'via @')
+
+
+def repost_words(title, description='', tags=()):
+    """What marks a source as a repost from another app or creator (empty when nothing does)."""
+    text = ' '.join([str(title or ''), str(description or '')[:500], ' '.join(map(str, tags or []))]).casefold()
+    words = sorted(set(re.findall(r"[a-z0-9]+", text)) & REPOST_WORDS)
+    return words + [p for p in REPOST_PHRASES if p in text]
 
 
 def discover(yt, cfg, cycle, used, own_channel, long=False, avoid_channels=()):
@@ -203,24 +218,26 @@ def long_window(c, cfg):
 def describe_clip(src, model, frames=4):
     """What happens in the clip and whether it is real camera footage, from a local vision model.
 
-    Returns {'seen': '3 sentences', 'footage': 'real' | 'cartoon' | 'ai' | 'object' | 'game' | ''}; both are '' when the
-    model is unavailable, so a missing model never blocks a clip."""
+    Returns {'seen': '3 sentences', 'footage': 'real' | 'cartoon' | 'ai' | 'object' | 'game' | '',
+    'watermark': True | False, 'marks': 'the logo or name it read'}. Everything is empty or False when the model is
+    unavailable, so a missing model never blocks a clip."""
     import base64
     import json
     import requests
     from commentary import media_seconds
     from live_clipper import ffmpeg
+    empty = {'seen': '', 'footage': '', 'watermark': False, 'marks': ''}
     try:
         seconds = media_seconds(src)
         images = []
         for n in range(frames):
             r = subprocess.run([ffmpeg(), '-v', 'error', '-ss', f'{seconds * (n + 0.5) / frames:.2f}', '-i', str(src),
-                                '-frames:v', '1', '-vf', 'scale=384:-2', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-'],
+                                '-frames:v', '1', '-vf', 'scale=512:-2', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-'],
                                capture_output=True, timeout=60)
             if r.stdout:
                 images.append(base64.b64encode(r.stdout).decode())
         if not images:
-            return {'seen': '', 'footage': ''}
+            return empty
         response = requests.post('http://127.0.0.1:11434/api/generate', json={
             'model': model, 'images': images, 'stream': False, 'keep_alive': '60s', 'format': 'json',
             'prompt': ('These are frames, in order, from one short funny video. Reply with ONLY a JSON object:\n'
@@ -231,8 +248,13 @@ def describe_clip(src, model, frames=4):
                        'it looks AI-generated (too smooth, melting details, impossible scenes, an animal far '
                        'bigger than real life or made of grass, plants, food or another material); "object" if the '
                        'only animal is a statue, sculpture, toy, costume, inflatable or plush; "game" if it is a '
-                       'video game. Answer "real" ONLY for a living animal filmed with a camera.}'),
-            'options': {'temperature': 0.1, 'num_predict': 220, 'num_ctx': 8192}}, timeout=240)
+                       'video game. Answer "real" ONLY for a living animal filmed with a camera.",\n'
+                       ' "watermark": true if ANY frame shows a watermark or logo burned into the video (TikTok, '
+                       'Instagram, CapCut, Kwai or any app or channel logo, often small and semi-transparent in a '
+                       'corner or moving around), or an @username, channel name or website written on the video; '
+                       'false otherwise (a caption that only describes the scene does not count),\n'
+                       ' "marks": "the exact logo, @username or channel name you read, or empty"}'),
+            'options': {'temperature': 0.1, 'num_predict': 300, 'num_ctx': 8192}}, timeout=240)
         response.raise_for_status()
         raw = response.json().get('response', '')
         try:
@@ -241,9 +263,29 @@ def describe_clip(src, model, frames=4):
             data = {'what': raw}
         seen = ' '.join(str(data.get('what') or '').split())[:600]
         footage = str(data.get('footage') or '').strip().casefold()
-        return {'seen': seen, 'footage': footage if footage in ('real', 'cartoon', 'ai', 'object', 'game') else ''}
+        marks = ' '.join(str(data.get('marks') or '').split())[:100]
+        mark = data.get('watermark') is True or str(data.get('watermark')).strip().casefold() == 'true'
+        return {'seen': seen, 'footage': footage if footage in ('real', 'cartoon', 'ai', 'object', 'game') else '',
+                'watermark': bool(mark or brand_marks(marks)), 'marks': marks}
     except Exception:
-        return {'seen': '', 'footage': ''}
+        return empty
+
+
+ON_VIDEO_BRANDS = REPOST_WORDS | {'instagram', 'snapchat', 'facebook'}
+
+
+def brand_marks(text):
+    """An @handle or app name in text the vision model read off the video."""
+    text = str(text or '').casefold()
+    return (bool(re.search(r'@\w|\w\.(com|net|tv)\b', text))
+            or bool(set(re.findall(r'[a-z0-9]+', text)) & ON_VIDEO_BRANDS))
+
+
+def clean_frame(look):
+    """None when no watermark, logo or other channel's name is on the video, else why the clip is refused."""
+    if look.get('watermark') or brand_marks(look.get('marks')) or brand_marks(look.get('seen')):
+        return 'watermark or another channel\'s name on the video: ' + (look.get('marks') or look.get('seen', ''))[:100]
+    return None
 
 
 def real_footage(look):
@@ -716,7 +758,7 @@ def cycle(state, config, run_now=False, yt=None):
             sc.progress(state, 'finishing', 'Checking the footage and writing the title')
             look = describe_clip(src, cfg['vision_model'])
             c['seen'] = look['seen']
-            problem = real_footage(look)
+            problem = real_footage(look) or clean_frame(look)
             if problem:
                 raise RuntimeError(problem)
             twist = write_twist(c, avoid=youtube_rules.recent_titles(state, ROOT, 8)[-8:],
@@ -734,7 +776,7 @@ def cycle(state, config, run_now=False, yt=None):
             continue
         library.add(c['id'], hashes, channel=c['channel'])
         digest = hashlib.sha256(video.read_bytes()).hexdigest()
-        meta = {'seen': c.get('seen', ''), 'footage': look['footage'], 'framing': frame_info, 'title': twist['title'],
+        meta = {'seen': c.get('seen', ''), 'footage': look['footage'], 'marks': look.get('marks', ''), 'framing': frame_info, 'title': twist['title'],
                 'description': description(c, twist), 'twist': twist, 'source': source, 'duration_seconds': duration}
         sc.save(folder / 'metadata.json', meta)
         if cfg['private_first']:

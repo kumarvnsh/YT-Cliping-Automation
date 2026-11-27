@@ -92,6 +92,25 @@ class Animals(unittest.TestCase):
         self.assertEqual(a.synthetic_words('Cat zoomies', 'filmed on my phone', ['cats']), [])
         self.assertEqual(a.synthetic_words('He touched the bell', '', ['giant cat statue']), ['statue'])
 
+    def test_clips_with_a_watermark_or_another_channels_name_are_refused(self):
+        # Owner, 28 Nov: skip videos with a watermark or a different channel's name on them.
+        clean = {'seen': 'Two puppies tumble off a couch.', 'footage': 'real', 'watermark': False, 'marks': ''}
+        self.assertIsNone(a.clean_frame(clean))
+        self.assertIsNone(a.clean_frame({**clean, 'marks': 'none'}))
+        self.assertIsNone(a.clean_frame({'seen': '', 'footage': ''}))  # vision model unavailable: do not block
+        self.assertIn('watermark', a.clean_frame({**clean, 'watermark': True, 'marks': 'TikTok'}))
+        self.assertIsNotNone(a.clean_frame({**clean, 'marks': '@funnypaws.daily'}))
+        self.assertIsNotNone(a.clean_frame({**clean, 'marks': 'petclips.com'}))
+        self.assertIsNotNone(a.clean_frame({**clean, 'seen': 'A cat falls off a sofa while a TikTok logo floats.'}))
+
+    def test_sources_reposted_from_tiktok_or_another_creator_are_skipped_before_download(self):
+        cfg = a.settings({})
+        tok = video('tok', 9_000_000); tok['snippet']['tags'] = ['funny cat', 'tiktok']
+        cr = video('cr', 8_000_000); cr['snippet']['description'] = 'Credit to @kittyfails, DM for removal'
+        real = video('real', 2_000_000); real['snippet']['description'] = 'My cat Milo, filmed at home'
+        self.assertEqual([c['id'] for c in a.rank([tok, cr, real], set(), 'OWN', cfg)], ['real'])
+        self.assertEqual(a.repost_words('Cat zoomies', 'filmed on my phone', ['cats']), [])
+
     def test_searches_lean_on_kids_and_pets(self):
         queries = a.settings({})['queries']
         self.assertGreaterEqual(sum(any(k in q for k in ('kid', 'baby', 'toddler')) for q in queries), 10)
