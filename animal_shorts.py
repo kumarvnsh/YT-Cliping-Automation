@@ -269,27 +269,46 @@ sheep lamb frog frogs otter otters penguin penguins seal seals elephant elephant
 ferret ferrets lizard lizards snake snakes owl owls hedgehog hedgehogs panda pandas deer kangaroo koala sloth crab
 fish shark dolphin whale turtle tortoise alpaca llama camel zebra hippo rhino crow cockatoo mouse mice rat rats'''.split())
 
-TITLE_STYLE = (
-    '"title": "a broad, catchy scroll-stopping title, 25-60 chars, in the style of a channel that posts funny animal '
-    'clips: say animals, pets, this little guy, furballs or the gang, NEVER the species or breed (no cat, dog, goat, '
-    'parrot...) and no narrow details of the clip; carry it with an energy word or a punchline about the vibe '
-    '(e.g. Ragebaiting pets be like 😭 / Funny animals with zero chill / Pets were NOT having it today / '
-    'This little guy chose violence / Animals that woke up and chose chaos), max one emoji at the end, '
-    'NOT the source title, no hashtags, and worded differently from the recent titles listed above"'
-)
+# A different few examples each draft. One fixed example list made the 8B model copy the same line every time
+# ("This little guy chose chaos" with a new emoji), which the duplicate-title rule then refused for every clip.
+TITLE_EXAMPLES = [
+    'Ragebaiting pets be like 😭', 'Funny animals with zero chill', 'Pets were NOT having it today',
+    'He really thought nobody saw that', 'Kids and pets are a dangerous combo', 'The confidence of this furball',
+    'When the baby and the pet team up', 'She did not sign up for this', 'Pets have no sense of personal space',
+    'That look of pure betrayal 💀', 'Most dramatic pet on the internet', 'He was NOT ready for that',
+    'Absolute menace energy', 'The gang causes problems again', 'Tiny troublemaker, huge attitude',
+    'Pets testing their owners patience', 'Who gave this furball permission', 'This is why we cannot have nice things',
+]
 
 
-def twist_prompt(c, avoid=()):
+def title_style(rng=None):
+    import random
+    examples = (rng or random).sample(TITLE_EXAMPLES, 4)
+    return (
+        '"title": "a broad, catchy scroll-stopping title, 25-60 chars, in the style of a channel that posts funny '
+        'pet clips: say animals, pets, this little guy, furballs, the baby or the gang, NEVER the species or breed '
+        '(no cat, dog, goat, parrot...) and no narrow details of the clip; carry it with an energy word or a '
+        'punchline about the vibe of THIS clip (style only, never copy these: ' + ' / '.join(examples) + '), '
+        'max one emoji at the end, NOT the source title, no hashtags, and sharing no phrase with the recent or '
+        'refused titles listed above"'
+    )
+
+
+def twist_prompt(c, avoid=(), refused=()):
     seen = f"What happens (seen in the frames): {c['seen']}\n" if c.get('seen') else ''
     recent = ('Recent Shotsnip titles (do not repeat their wording):\n' + '\n'.join(f'- {t}' for t in avoid) + '\n'
               if avoid else '')
+    if refused:
+        recent += ('Titles you already wrote for this clip that were REFUSED (write something with completely '
+                   'different words, not the same line with another emoji):\n'
+                   + '\n'.join(f'- {t}' for t in refused) + '\n')
     return (
         "You are the writer for Shotsnip, a Shorts channel that re-shares viral funny clips of real pets "
         "(cats, dogs and other pets, often with kids), full screen with one short line of text.\n"
         f"{seen}Source title: {c['title']}\nSource description: {c['description'][:300]}\n"
         f"Tags: {', '.join(c['tags'][:12])}\n{recent}\n"
         "Base the hook on what happens. Reply with ONLY a JSON object:\n"
-        '{' + TITLE_STYLE + ',\n'
+        '{' + title_style() + ',\n'
         ' "hook": "2 to 6 words of on-screen text shown at the bottom of the video for the first seconds: a '
         'teaser that makes people keep watching without spoiling the moment, e.g. Wait for it... / He was so '
         'confident / Nobody expected this",\n'
@@ -335,22 +354,31 @@ def clean_twist(raw, c):
     return twist
 
 
-def write_twist(c, ask=None, tries=4, avoid=(), check=None):
+class TwistFailed(RuntimeError):
+    """The writer could not produce a usable title. Says nothing about the clip, so the clip is not burned."""
+
+
+def write_twist(c, ask=None, tries=5, avoid=(), check=None):
     """check(title) returns a problem or None; a title the upload rules would refuse is redrafted here, so the
     downloaded clip is not wasted on a vague or repeated title."""
     if ask is None:
         from commentary import _ask as ask
-    last = None
+    last, refused = None, []
     for _ in range(tries):
+        title = ''
         try:
-            twist = clean_twist(ask(twist_prompt(c, avoid)), c)
+            raw = ask(twist_prompt(c, avoid, refused))
+            title = str((raw or {}).get('title') or '').strip()
+            twist = clean_twist(raw, c)
             problem = check(twist['title']) if check else None
             if problem:
                 raise ValueError(problem)
             return twist
-        except Exception as exc:  # a weak draft is redrafted, never published
+        except Exception as exc:  # a weak draft is redrafted with the refusal shown, never published
             last = exc
-    raise RuntimeError(f'Could not write a usable twist: {last}')
+            if title and title not in refused:
+                refused.append(title)
+    raise TwistFailed(f'Could not write a usable twist: {last}')
 
 
 SPACER_LINES = 14  # a column of "." lines pushes the credit below the fold on YouTube and Facebook
@@ -701,7 +729,8 @@ def cycle(state, config, run_now=False, yt=None):
                 sc.save(sc.WORK / 'state.json', state)
                 sc.progress(state, 'queued', 'YouTube is rate-limiting downloads; trying again next cycle')
                 return {'status': 'youtube_blocked', 'error': str(exc)[:200]}
-            animal['used'].append(c['id'])
+            if not isinstance(exc, TwistFailed):  # a good clip the writer stumbled on stays available
+                animal['used'].append(c['id'])
             errors.append(f"{c['id']}: {exc}"[:300])
             continue
         library.add(c['id'], hashes, channel=c['channel'])

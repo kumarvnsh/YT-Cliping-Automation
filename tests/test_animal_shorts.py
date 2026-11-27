@@ -175,6 +175,24 @@ class Twist(unittest.TestCase):
         self.assertEqual(twist['title'], self.good['title'])
         self.assertIn('- Pets were NOT having it today', prompts[0])
 
+    def test_refused_titles_are_fed_back_so_the_writer_changes_its_words(self):
+        # 27 Nov run: every draft was "This little guy chose chaos" + a new emoji, so all five clips failed.
+        recent = 'This little guy chose chaos 🐾'
+        prompts = []
+        def ask(prompt):
+            prompts.append(prompt)
+            return {**self.good, 'title': 'This little guy chose chaos 😂' if len(prompts) < 3 else self.good['title']}
+        def check(title):  # what the duplicate-title rule said on the laptop
+            return f'title "{title}" repeats the recent title "{recent}"' if 'chose chaos' in title else None
+        self.assertEqual(a.write_twist(SOURCE, ask=ask, check=check)['title'], self.good['title'])
+        self.assertNotIn('REFUSED', prompts[0])
+        self.assertIn('- This little guy chose chaos 😂', prompts[1])
+        self.assertNotIn('chose violence', ''.join(prompts))
+
+    def test_writer_failure_is_its_own_error_so_the_clip_is_not_burned(self):
+        with self.assertRaises(a.TwistFailed):
+            a.write_twist(SOURCE, ask=lambda _p: {'title': 'funny animal video'})
+
     def test_overlay_is_one_bottom_center_line_for_the_first_seconds(self):
         twist = a.clean_twist(self.good, SOURCE)
         ass = a.overlay_ass(twist, duration=8.0, caption_seconds=5)
