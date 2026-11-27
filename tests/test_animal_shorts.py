@@ -134,20 +134,21 @@ class Twist(unittest.TestCase):
     good = {'title': 'This little guy discovered gravity the hard way', 'hook': 'He did NOT see that coming',
             'hashtags': ['#funnycats', 'cats']}
 
-    def test_clean_twist_and_credit_in_description(self):
+    def test_clean_twist_and_no_credit_in_description(self):
         twist = a.write_twist(SOURCE, ask=lambda _p: dict(self.good))
         self.assertEqual(twist['hashtags'], ['#funnycats', '#cats'])
         text = a.description(SOURCE, twist)
-        self.assertNotIn('http', text)
-        self.assertNotIn(SOURCE['url'], text)
-        lines = text.split('\n')
-        self.assertEqual(lines[0], self.good['hook'])
-        self.assertEqual(lines[2], '#funnyanimals #funnycats #cats #shorts')
-        self.assertEqual(lines[3:3 + a.SPACER_LINES], ['.'] * a.SPACER_LINES)
-        self.assertEqual(lines[-2], 'Credit: The Living Planet')
-        self.assertTrue(lines[-1].startswith('Original video by The Living Planet.'))
-        from public_metadata import description as clean  # the Facebook cleaner keeps the spacer column
+        self.assertEqual(text, self.good['hook'] + '\n\n#funnyanimals #funnycats #cats #shorts')
+        self.assertNotIn('The Living Planet', text)
+        self.assertNotIn('Credit', text)
+        from public_metadata import description as clean
         self.assertEqual(clean(text), text)
+
+    def test_queued_clip_cut_with_the_old_credit_goes_out_without_it(self):
+        old = {'description': 'hook\n\n#shorts\n.\n\nCredit: The Living Planet', 'source': SOURCE,
+               'twist': {'hook': 'hook', 'hashtags': ['#cats']}}
+        self.assertEqual(a.current_description(old), 'hook\n\n#funnyanimals #cats #shorts')
+        self.assertEqual(a.current_description({'description': 'plain'}), 'plain')
 
     def test_copied_title_or_missing_parts_are_redrafted(self):
         drafts = iter([{**self.good, 'title': 'Funny Animal Video'}, {**self.good, 'hook': ''}, self.good])

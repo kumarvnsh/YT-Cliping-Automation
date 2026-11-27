@@ -7,7 +7,7 @@ Each scheduler tick does at most one of:
   2. otherwise, when a cycle is due: find the most-viewed matching Short not used yet, re-cut it full screen
      9:16 with its own sound (no narration, no blurred frame), add one short line of text at the bottom center
      for the first few seconds, and upload it.
-The original creator is always credited by channel name at the bottom of the description (no link).
+The description carries the hook and hashtags only; the original creator is credited on screen.
 """
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -381,19 +381,18 @@ def write_twist(c, ask=None, tries=5, avoid=(), check=None):
     raise TwistFailed(f'Could not write a usable twist: {last}')
 
 
-SPACER_LINES = 14  # a column of "." lines pushes the credit below the fold on YouTube and Facebook
-
-
 def description(c, twist):
-    """Hook, hashtags, then the credit at the very bottom. The credit names the original channel only, no link."""
+    """Hook, then hashtags. No source credit in the description (owner's call); the on-video text credits the creator."""
     tags = ' '.join(dict.fromkeys(['#funnyanimals'] + twist['hashtags'] + ['#shorts']))
-    spacer = '\n'.join(['.'] * SPACER_LINES)
-    return (f"{twist['hook']}\n\n"
-            f"{tags}\n"
-            f"{spacer}\n\n"
-            f"Credit: {c['channel']}\n"
-            f"Original video by {c['channel']}. All rights belong to the original creator; "
-            "Shotsnip adds its own commentary and edit. Creators: contact us for credit changes or removal.")
+    return f"{twist['hook']}\n\n{tags}"
+
+
+def current_description(meta):
+    """The description to send now. Clips rendered before a layout change are rebuilt from their twist, so a
+    clip waiting in the queue goes out with today's layout rather than the one saved when it was cut."""
+    if meta.get('twist') and (meta.get('source') or {}).get('channel'):
+        return description(meta['source'], meta['twist'])
+    return meta.get('description', '')
 
 
 # ---------- render ----------
@@ -755,9 +754,7 @@ def crosspost_facebook(record, state):
     import scheduled_clips as sc
     video = Path(record['file'])
     meta = sc.read(video.parent / 'metadata.json', {})
-    text = meta.get('description', '')
-    if meta.get('twist') and (meta.get('source') or {}).get('channel'):
-        text = description(meta['source'], meta['twist'])  # clips made before the credit change get the new layout too
+    text = current_description(meta)
     fb.crosspost(record, video, record.get('title', ''), text, ROOT)
     sc.save(sc.WORK / 'state.json', state)
     if meta:
@@ -769,7 +766,7 @@ def crosspost_facebook(record, state):
 def insert(yt, video, meta, privacy):
     from googleapiclient.http import MediaFileUpload
     return yt.videos().insert(part='snippet,status', body={
-        'snippet': {'title': meta['title'][:100], 'description': meta['description'], 'categoryId': CATEGORY,
+        'snippet': {'title': meta['title'][:100], 'description': current_description(meta), 'categoryId': CATEGORY,
                     'tags': ['funny animals', 'funny animal video', 'animals', 'Shorts', 'Shotsnip']},
         'status': {'privacyStatus': privacy, 'selfDeclaredMadeForKids': False}},
         media_body=MediaFileUpload(str(video), mimetype='video/mp4', resumable=True)).execute(num_retries=0)['id']
@@ -832,7 +829,7 @@ def upload_private(yt, video, meta, digest, state, animal, c):
     sc.progress(state, 'uploading', 'Uploading privately for YouTube\'s copyright check')
     try:
         result = yt.videos().insert(part='snippet,status', body={
-            'snippet': {'title': meta['title'][:100], 'description': meta['description'], 'categoryId': CATEGORY,
+            'snippet': {'title': meta['title'][:100], 'description': current_description(meta), 'categoryId': CATEGORY,
                         'tags': ['funny animals', 'funny animal video', 'animals', 'Shorts', 'Shotsnip']},
             'status': {'privacyStatus': 'private', 'selfDeclaredMadeForKids': False}},
             media_body=MediaFileUpload(str(video), mimetype='video/mp4', resumable=True)).execute(num_retries=0)
