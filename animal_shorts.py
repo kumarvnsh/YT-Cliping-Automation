@@ -7,7 +7,7 @@ Each scheduler tick does at most one of:
   2. otherwise, when a cycle is due: find the most-viewed matching Short not used yet, re-cut it full screen
      9:16 with its own sound (no narration, no blurred frame), add one short line of text at the bottom center
      for the first few seconds, and upload it.
-The description carries the hook and hashtags only; the original creator is credited on screen.
+The description carries the hook and hashtags only, with no source credit (owner's call, 2026-11-27).
 """
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -382,7 +382,7 @@ def write_twist(c, ask=None, tries=5, avoid=(), check=None):
 
 
 def description(c, twist):
-    """Hook, then hashtags. No source credit in the description (owner's call); the on-video text credits the creator."""
+    """Hook, then hashtags. No source credit, by the owner's choice."""
     tags = ' '.join(dict.fromkeys(['#funnyanimals'] + twist['hashtags'] + ['#shorts']))
     return f"{twist['hook']}\n\n{tags}"
 

@@ -11,7 +11,7 @@ import copy
 SETTINGS = (
     ('niche', 'Channel content', 'Posting', 'choice', ('gta', 'animals'), 'gta',
      'gta: live GTA stream clips. animals: most-viewed funny animal and brainrot Shorts, re-cut with a '
-     'Shotsnip twist, credited on screen and published only after YouTube\'s copyright check.'),
+     'Shotsnip twist and published only after YouTube\'s copyright check.'),
     ('youtube_rules.max_per_day', 'Uploads a day', 'Posting', 'int', (1, 12), 3,
      'At most this many YouTube uploads in any 24 hours.'),
     ('youtube_rules.min_gap_minutes', 'Minimum gap between uploads (min)', 'Posting', 'int', (30, 1440), 120,
