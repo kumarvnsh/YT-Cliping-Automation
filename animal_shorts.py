@@ -32,7 +32,10 @@ DEFAULTS = {
                 'cat zoomies', 'dramatic cat', 'dog reaction funny', 'puppy being silly', 'husky talking back',
                 'golden retriever funny', 'cat knocking things over', 'dog caught red handed', 'dog guilty face',
                 'cat jump fail', 'cat vs cucumber', 'pets being dramatic', 'funny kitten', 'funny puppy',
-                'funny parrot talking', 'funny hamster', 'funny bunny'],
+                'funny parrot talking', 'funny hamster', 'funny bunny',
+                # Owner (27 Nov): the gecko clip is the channel's most viewed, so small odd pets get their own slots.
+                'funny gecko', 'gecko licking eye', 'gecko screaming', 'pet lizard funny', 'bearded dragon funny',
+                'funny pet frog', 'funny hedgehog', 'funny ferret'],
     'search_orders': ['viewCount', 'relevance'],  # alternate, so it is not always the same most-viewed few
     'min_views': 1_000_000,
     # Quality: a reupload farm's clip has views but few likes. Below this like share it is skipped (when likes show).
