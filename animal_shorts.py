@@ -22,10 +22,23 @@ CATEGORY = '15'  # Pets & Animals
 MAX_SECONDS = 59.0
 
 DEFAULTS = {
-    # Mostly real funny animal clips (like "funny animal video 😂", 55M views); brainrot is 1 search in 10.
-    'queries': ['funny animal video', 'funny cats', 'funny dogs', 'funny animals', 'funny pets',
-                'funny cat video', 'funny dog video', 'animal fails', 'funny animal moments', 'italian brainrot'],
+    # Real funny animal clips only. A wide, specific list so searches reach far past the same top 50 viral clips;
+    # titles stay broad anyway (SPECIFIC_ANIMALS), so naming species here only widens the pool.
+    'queries': ['funny animal video', 'funny cats', 'funny dogs', 'funny animals', 'funny pets', 'animal fails',
+                'funny animal moments', 'cat zoomies', 'dramatic cat', 'dog reaction funny', 'puppy being silly',
+                'husky talking back', 'golden retriever funny', 'cat knocking things over', 'dog caught red handed',
+                'funny parrot talking', 'screaming goat', 'funny horse', 'funny cow', 'funny duck', 'goose chasing',
+                'raccoon stealing', 'funny monkey', 'capybara chill', 'otter funny', 'funny hamster',
+                'funny bird', 'farm animals funny', 'cat vs cucumber', 'pets being dramatic', 'animal sneeze',
+                'dog guilty face', 'cat jump fail', 'baby animals funny', 'wild animal funny moment'],
+    'search_orders': ['viewCount', 'relevance'],  # alternate, so it is not always the same most-viewed few
     'min_views': 1_000_000,
+    # Quality: a reupload farm's clip has views but few likes. Below this like share it is skipped (when likes show).
+    'min_like_ratio': 0.01,
+    # Recycled formats, not a funny moment of their own: ranking/tier-list edits and compilations cut to a Short.
+    'skip_title_words': ['ranking', 'ranked', 'tier list', 'top 10', 'top 5', 'compilation', 'part 2', 'part 3',
+                         'brainrot', 'minecraft', 'roblox', 'beamng', 'ai generated', 'stick figure'],
+    'recent_channel_gap': 15,     # never take a creator again within their last 15 animal uploads
     'max_source_seconds': 60,
     'private_first': False,       # owner (24 Nov): upload straight to public in its slot; owner handles claims
     'ready_lead_minutes': 60,     # direct mode: start making the next clip this long before its slot
@@ -56,42 +69,67 @@ def parse_duration(iso):
 # ---------- discovery ----------
 
 def query_plan(cfg, cycle):
-    """Which search runs this cycle: queries and time windows rotate so results keep changing."""
-    queries, windows = cfg['queries'], cfg['windows_days']
-    return queries[cycle % len(queries)], windows[(cycle // len(queries)) % len(windows)]
+    """Which search runs this cycle. Every query is used once per round, in a different shuffled order each round,
+    and the time window and sort order change between rounds, so results keep changing."""
+    import random
+    queries, windows = list(cfg['queries']), cfg['windows_days']
+    orders = cfg.get('search_orders') or ['viewCount']
+    rnd, slot = divmod(cycle, len(queries))
+    random.Random(rnd).shuffle(queries)
+    return queries[slot], windows[rnd % len(windows)], orders[(rnd + slot) % len(orders)]
 
 
-def rank(items, used, own_channel, cfg, subscribers=None, long=False):
-    """Eligible Shorts (or long compilations when long=True), most views first."""
+def recent_channels(state, limit):
+    """Channel IDs and names of the last `limit` animal uploads, so one creator does not fill the feed."""
+    rows = [r.get('source') or {} for r in state.get('uploads', [])
+            if r.get('status') == 'uploaded' and (r.get('source') or {}).get('game') == 'animals'][-limit:] if limit else []
+    return {x for r in rows for x in (r.get('channel_id'), str(r.get('channel') or '').strip().casefold()) if x}
+
+
+def score(views, likes):
+    """Views matter, but a well-liked clip beats a slightly bigger one that people scrolled past."""
+    import math
+    ratio = (likes / views) if views and likes is not None else 0.03
+    return math.log10(max(views, 1)) + 25 * min(ratio, 0.08)
+
+
+def rank(items, used, own_channel, cfg, subscribers=None, long=False, avoid_channels=()):
+    """Eligible Shorts (or long compilations when long=True), best first by views and like share."""
     low, high = (240, 3 * 3600) if long else (1, cfg['max_source_seconds'])
     min_views = cfg['long_min_views'] if long else cfg['min_views']
     out, subscribers = [], subscribers or {}
-    skip = {str(x).casefold() for x in cfg.get('skip_channels', [])}
+    skip = {str(x).casefold() for x in cfg.get('skip_channels', [])} | set(avoid_channels)
+    bad_words = [] if long else [str(w).casefold() for w in cfg.get('skip_title_words', [])]
     for v in items:
         cid = v['snippet'].get('channelId')
+        title = v['snippet'].get('title', '')
         if (subscribers.get(cid, 0) > cfg['max_channel_subscribers']
-                or str(v['snippet'].get('channelTitle', '')).casefold() in skip or cid in skip):
+                or str(v['snippet'].get('channelTitle', '')).strip().casefold() in skip or cid in skip
+                or any(w in title.casefold() for w in bad_words)):
             continue
         stats, status = v.get('statistics', {}), v.get('status', {})
         seconds = parse_duration(v.get('contentDetails', {}).get('duration'))
         views = int(stats.get('viewCount') or 0)
+        likes = int(stats['likeCount']) if stats.get('likeCount') is not None else None
         if (v['id'] in used or v['snippet'].get('channelId') == own_channel or status.get('madeForKids')
                 or not low <= seconds <= high or views < min_views):
             continue
-        out.append({'id': v['id'], 'title': v['snippet'].get('title', ''),
+        if likes is not None and views and likes / views < cfg.get('min_like_ratio', 0):
+            continue
+        out.append({'id': v['id'], 'title': title,
                     'description': v['snippet'].get('description', ''), 'tags': v['snippet'].get('tags', []),
                     'channel': v['snippet'].get('channelTitle', ''), 'channel_id': v['snippet'].get('channelId'),
-                    'views': views, 'seconds': seconds,
+                    'views': views, 'likes': likes, 'seconds': seconds, 'score': score(views, likes),
                     'long': long, 'url': (f"https://www.youtube.com/watch?v={v['id']}" if long
                                           else f"https://www.youtube.com/shorts/{v['id']}")})
-    return sorted(out, key=lambda c: c['views'], reverse=True)
+    return sorted(out, key=lambda c: c['score'], reverse=True)
 
 
-def discover(yt, cfg, cycle, used, own_channel, long=False):
-    query, days = query_plan(cfg, cycle)
+def discover(yt, cfg, cycle, used, own_channel, long=False, avoid_channels=()):
+    query, days, order = query_plan(cfg, cycle)
     if long:
         query += ' compilation'
-    params = dict(part='id', q=query, type='video', order='viewCount',
+    params = dict(part='id', q=query, type='video', order=order,
                   videoDuration=('medium' if cycle % 2 else 'long') if long else 'short',
                   maxResults=50, safeSearch='moderate')
     if days:
@@ -105,7 +143,7 @@ def discover(yt, cfg, cycle, used, own_channel, long=False):
     for n in range(0, len(channels), 50):
         for ch in yt.channels().list(part='statistics', id=','.join(channels[n:n + 50])).execute().get('items', []):
             subscribers[ch['id']] = int(ch.get('statistics', {}).get('subscriberCount') or 0)
-    return query, rank(items, used, own_channel, cfg, subscribers, long=long)
+    return query, rank(items, used, own_channel, cfg, subscribers, long=long, avoid_channels=avoid_channels)
 
 
 # ---------- long-form: the most-replayed moment ----------
@@ -195,7 +233,7 @@ def twist_prompt(c, avoid=()):
               if avoid else '')
     return (
         "You are the writer for Shotsnip, a Shorts channel that re-shares viral funny animal clips (cats, dogs, "
-        "pets, wild animals; now and then an AI brainrot clip) with its own comedy twist.\n"
+        "pets, farm and wild animals) with its own comedy twist.\n"
         f"{seen}Source title: {c['title']}\nSource description: {c['description'][:300]}\n"
         f"Tags: {', '.join(c['tags'][:12])}\n{recent}\n"
         "Base the hook, voice line and captions on what happens. Reply with ONLY a JSON object:\n"
@@ -207,6 +245,19 @@ def twist_prompt(c, avoid=()):
         'Cats are built different; may name one or two animals that appear"],\n'
         ' "hashtags": ["3 to 5 hashtags like #funnyanimals"]}'
     )
+
+
+ANIMAL_WORDS = SPECIFIC_ANIMALS | set('''animal animals pet pets creature creatures wildlife critter critters
+buffalo bison bull ox yak gecko iguana chameleon cheetah leopard jaguar wolf wolves hyena meerkat lemur orangutan
+chimpanzee chimp ape baboon peacock pigeon swan ostrich emu flamingo toucan eagle hawk seagull gull octopus bee
+cattle moose elk reindeer boar guinea chinchilla skunk possum opossum badger beaver walrus puppy kitten insect
+spider bat cub cubs calf foal goat lamb'''.split())
+
+
+def shows_animals(seen):
+    """False only when the vision model looked and saw no animal at all (a game, a cartoon prop, a car crash)."""
+    found = {w.rstrip('s') for w in re.findall(r"[a-z]+", str(seen or '').casefold())}
+    return not seen or bool(found & {w.rstrip('s') for w in ANIMAL_WORDS})
 
 
 def too_specific(title):
@@ -393,7 +444,22 @@ def verdict(item):
 
 # ---------- cycle ----------
 
+def footage_library(state):
+    """Fingerprints of every posted clip; clips posted before fingerprints existed are added from disk once."""
+    import clip_fingerprint as fp
+    library = fp.Library(WORK / 'fingerprints.json')
+    posted = {(r.get('source') or {}).get('video') for r in state.get('uploads', [])
+              if r.get('status') == 'uploaded' and (r.get('source') or {}).get('game') == 'animals'}
+    held = (state.get('animal') or {}).get('held') or {}
+    posted |= {(held.get('source') or {}).get('video'), ((state.get('animal') or {}).get('ready') or {}).get('source', {}).get('video')}
+    posted.discard(None)
+    if posted - set(library.items):
+        fp.backfill(library, WORK, only=posted)
+    return library
+
+
 def cycle(state, config, run_now=False, yt=None):
+    import clip_fingerprint as fp
     import scheduled_clips as sc
     import youtube_rules
     cfg = settings(config)
@@ -454,10 +520,12 @@ def cycle(state, config, run_now=False, yt=None):
     animal['last_cycle_at'] = time.time()
     number = animal['cycles']
     animal['cycles'] = number + 1
-    sc.progress(state, 'scanning', 'Looking for the most-viewed animal and brainrot Shorts')
+    sc.progress(state, 'scanning', 'Looking for the best funny animal Shorts not posted yet')
     every = cfg['long_form_every']
     long = bool(every) and number % every == every - 1
-    query, ranked = discover(yt, cfg, number, set(animal['used']), own_channel, long=long)
+    library = footage_library(state)
+    query, ranked = discover(yt, cfg, number, set(animal['used']), own_channel, long=long,
+                             avoid_channels=recent_channels(state, cfg['recent_channel_gap']))
     errors = []
     for c in ranked[:6]:
         source = {'channel': c['channel'], 'channel_id': c['channel_id'], 'game': 'animals', 'url': c['url'],
@@ -478,8 +546,14 @@ def cycle(state, config, run_now=False, yt=None):
                 source.update(url=c['url'], start=c['start'])
             sc.progress(state, 'capturing', f"Downloading {c['views']:,}-view Short by {c['channel']}")
             src = download(c, folder)
+            hashes = fp.fingerprint(src)
+            twin = library.duplicate_of(hashes, skip=c['id'])
+            if twin:  # same footage re-uploaded by another channel: never post it again
+                raise RuntimeError(f'same footage as {twin}, which Shotsnip already used')
             sc.progress(state, 'finishing', 'Writing the twist and recording the voice reaction')
             c['seen'] = describe_clip(src, cfg['vision_model'])
+            if not shows_animals(c['seen']):
+                raise RuntimeError('no animals in the clip: ' + c['seen'][:120])
             twist = write_twist(c, avoid=youtube_rules.recent_titles(state, ROOT, 8)[-8:],
                                 check=lambda t: youtube_rules.title_problem(t, source, state, config, ROOT))
             from commentary import speak
@@ -495,6 +569,7 @@ def cycle(state, config, run_now=False, yt=None):
             animal['used'].append(c['id'])
             errors.append(f"{c['id']}: {exc}"[:300])
             continue
+        library.add(c['id'], hashes, channel=c['channel'])
         digest = hashlib.sha256(video.read_bytes()).hexdigest()
         meta = {'seen': c.get('seen', ''), 'title': twist['title'], 'description': description(c, twist), 'twist': twist,
                 'source': source, 'duration_seconds': duration}

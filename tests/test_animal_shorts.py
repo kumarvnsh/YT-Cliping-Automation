@@ -30,9 +30,44 @@ class Rank(unittest.TestCase):
         ranked = a.rank(items, set(), 'OWN', cfg, subscribers={'BIG': 300_000_000})
         self.assertEqual([c['id'] for c in ranked], ['c'])
 
-    def test_query_plan_rotates_queries_then_windows(self):
-        cfg = {'queries': ['x', 'y'], 'windows_days': [0, 7]}
-        self.assertEqual([a.query_plan(cfg, n) for n in range(4)], [('x', 0), ('y', 0), ('x', 7), ('y', 7)])
+    def test_query_plan_uses_every_query_each_round_then_changes_window_and_order(self):
+        cfg = {'queries': ['x', 'y', 'z'], 'windows_days': [0, 7], 'search_orders': ['viewCount', 'relevance']}
+        plans = [a.query_plan(cfg, n) for n in range(6)]
+        self.assertEqual(sorted(q for q, _, _ in plans[:3]), ['x', 'y', 'z'])
+        self.assertEqual(sorted(q for q, _, _ in plans[3:]), ['x', 'y', 'z'])
+        self.assertEqual({d for _, d, _ in plans[:3]}, {0})
+        self.assertEqual({d for _, d, _ in plans[3:]}, {7})
+        self.assertEqual({o for _, _, o in plans}, {'viewCount', 'relevance'})
+
+    def test_well_liked_clip_beats_a_bigger_one_nobody_liked(self):
+        cfg = a.settings({})
+        liked, farm = video('liked', 3_000_000), video('farm', 9_000_000)
+        liked['statistics']['likeCount'] = '150000'   # 5 %
+        farm['statistics']['likeCount'] = '120000'    # 1.3 %
+        self.assertEqual([c['id'] for c in a.rank([farm, liked], set(), 'OWN', cfg)], ['liked', 'farm'])
+
+    def test_low_like_share_and_recycled_formats_are_skipped(self):
+        cfg = a.settings({})
+        dead = video('dead', 9_000_000); dead['statistics']['likeCount'] = '20000'   # 0.2 %
+        tier = video('tier', 9_000_000); tier['snippet']['title'] = 'Ranking Funniest Cat Prank Moments'
+        hidden = video('hidden', 2_000_000)  # likes hidden: not judged on them
+        self.assertEqual([c['id'] for c in a.rank([dead, tier, hidden], set(), 'OWN', cfg)], ['hidden'])
+
+    def test_recent_creators_are_rested(self):
+        cfg = a.settings({})
+        state = {'uploads': [{'status': 'uploaded', 'source': {'game': 'animals', 'channel': 'Chan a',
+                                                               'channel_id': 'CA'}}]}
+        avoid = a.recent_channels(state, cfg['recent_channel_gap'])
+        items = [video('a', 9_000_000, channel='CA'), video('b', 2_000_000, channel='CB')]
+        self.assertEqual([c['id'] for c in a.rank(items, set(), 'OWN', cfg, avoid_channels=avoid)], ['b'])
+
+
+class Animals(unittest.TestCase):
+    def test_clip_must_show_an_animal_when_the_vision_model_saw_it(self):
+        self.assertTrue(a.shows_animals('Two puppies tumble off a couch.'))
+        self.assertTrue(a.shows_animals('A buffalo charges and men run.'))
+        self.assertTrue(a.shows_animals(''))  # vision model unavailable: do not block
+        self.assertFalse(a.shows_animals('A stick figure falls through a rainbow maze in a block game.'))
 
 
 class LongForm(unittest.TestCase):
