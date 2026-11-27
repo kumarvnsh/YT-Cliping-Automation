@@ -69,6 +69,52 @@ class Animals(unittest.TestCase):
         self.assertTrue(a.shows_animals(''))  # vision model unavailable: do not block
         self.assertFalse(a.shows_animals('A stick figure falls through a rainbow maze in a block game.'))
 
+    def test_cartoon_and_ai_clips_are_refused_even_with_an_animal_in_them(self):
+        # The 27 Nov Facebook post: an AI cartoon cat spilling gems passed because "cat" is an animal word.
+        cartoon = {'seen': 'An orange cat crashes a bike and gems spill on a colourful street.', 'footage': 'cartoon'}
+        self.assertIn('cartoon', a.real_footage(cartoon))
+        self.assertIn('ai', a.real_footage({**cartoon, 'footage': 'ai'}))
+        self.assertIn('animated', a.real_footage({'seen': 'An animated orange cat falls off a bike.', 'footage': ''}))
+        self.assertIsNone(a.real_footage({'seen': 'Two puppies tumble off a couch.', 'footage': 'real'}))
+        self.assertIsNone(a.real_footage({'seen': '', 'footage': ''}))  # vision model unavailable: do not block
+        self.assertIn('no animals', a.real_footage({'seen': 'A car slides on ice.', 'footage': 'real'}))
+        # 27 Nov reference: a man rings the bell on a giant grass cat; no living animal at all.
+        giant = {'seen': 'A man rings a bell on the collar of a giant topiary cat statue.', 'footage': ''}
+        self.assertIn('statue', a.real_footage(giant))
+        self.assertIn('object', a.real_footage({**giant, 'seen': 'A man taps a huge green cat.', 'footage': 'object'}))
+
+    def test_sources_that_call_themselves_ai_or_cartoon_are_skipped_before_download(self):
+        cfg = a.settings({})
+        ai = video('ai', 9_000_000); ai['snippet']['tags'] = ['funny cat', 'AI video']
+        toon = video('toon', 9_000_000); toon['snippet']['description'] = 'Cute cat animation #pixar #cartoon'
+        real = video('real', 2_000_000); real['snippet']['title'] = 'My cat said no (rain day)'
+        self.assertEqual([c['id'] for c in a.rank([ai, toon, real], set(), 'OWN', cfg)], ['real'])
+        self.assertEqual(a.synthetic_words('Cat zoomies', 'filmed on my phone', ['cats']), [])
+        self.assertEqual(a.synthetic_words('He touched the bell', '', ['giant cat statue']), ['statue'])
+
+    def test_searches_lean_on_kids_and_pets(self):
+        queries = a.settings({})['queries']
+        self.assertGreaterEqual(sum(any(k in q for k in ('kid', 'baby', 'toddler')) for q in queries), 10)
+        self.assertFalse(any(w in q for q in queries for w in ('wild', 'goat', 'cow', 'monkey', 'raccoon')))
+
+
+class Framing(unittest.TestCase):
+    def test_vertical_source_fills_the_screen_without_a_crop(self):
+        self.assertEqual(a.fill_filter(1080, 1920), 'scale=1080:1920:flags=lanczos')
+
+    def test_landscape_source_is_cropped_to_9_16_around_the_action(self):
+        self.assertEqual(a.fill_filter(1920, 1080, 0.5), 'crop=606:1080:656:0,scale=1080:1920:flags=lanczos')
+        self.assertEqual(a.fill_filter(1920, 1080, 0.0), 'crop=606:1080:0:0,scale=1080:1920:flags=lanczos')
+        self.assertEqual(a.fill_filter(1920, 1080, 1.0), 'crop=606:1080:1314:0,scale=1080:1920:flags=lanczos')
+
+    def test_subject_center_follows_the_motion_and_defaults_to_the_middle(self):
+        keep = 0.3
+        right = [0] * 70 + [10] * 20 + [0] * 6
+        self.assertGreater(a.subject_center(right, keep), 0.75)
+        self.assertEqual(a.subject_center([0] * 96, keep), 0.5)
+        self.assertEqual(a.subject_center([], keep), 0.5)
+        self.assertAlmostEqual(a.subject_center([1] * 96, keep), 0.5, delta=0.02)  # evenly busy: stay centered
+
 
 class LongForm(unittest.TestCase):
     def test_long_compilations_use_watch_urls_and_their_own_view_floor(self):
@@ -86,7 +132,6 @@ class LongForm(unittest.TestCase):
 
 class Twist(unittest.TestCase):
     good = {'title': 'This little guy discovered gravity the hard way', 'hook': 'He did NOT see that coming',
-            'voice_line': 'I meant to do that. Totally meant to.', 'captions': ['confidence: 100', 'skill: 0'],
             'hashtags': ['#funnycats', 'cats']}
 
     def test_clean_twist_and_credit_in_description(self):
@@ -105,7 +150,7 @@ class Twist(unittest.TestCase):
         self.assertEqual(clean(text), text)
 
     def test_copied_title_or_missing_parts_are_redrafted(self):
-        drafts = iter([{**self.good, 'title': 'Funny Animal Video'}, {**self.good, 'captions': ['one']}, self.good])
+        drafts = iter([{**self.good, 'title': 'Funny Animal Video'}, {**self.good, 'hook': ''}, self.good])
         self.assertEqual(a.write_twist(SOURCE, ask=lambda _p: next(drafts))['title'], self.good['title'])
         with self.assertRaises(RuntimeError):
             a.write_twist(SOURCE, ask=lambda _p: {'title': 'funny animal video'})
@@ -130,10 +175,16 @@ class Twist(unittest.TestCase):
         self.assertEqual(twist['title'], self.good['title'])
         self.assertIn('- Pets were NOT having it today', prompts[0])
 
-    def test_overlay_has_hook_voice_line_and_captions(self):
-        ass = a.overlay_ass(a.clean_twist(self.good, SOURCE), duration=8.0, voice_seconds=2.5)
-        self.assertIn('HE DID NOT SEE THAT COMING', ass)
-        self.assertEqual(ass.count('Dialogue:'), 4)
+    def test_overlay_is_one_bottom_center_line_for_the_first_seconds(self):
+        twist = a.clean_twist(self.good, SOURCE)
+        ass = a.overlay_ass(twist, duration=8.0, caption_seconds=5)
+        self.assertEqual(ass.count('Dialogue:'), 1)
+        self.assertIn('0:00:00.00,0:00:05.00,Hook', ass)
+        self.assertIn('He did NOT see that coming', ass)
+        style = next(line for line in ass.splitlines() if line.startswith('Style: Hook'))
+        self.assertEqual(style.split(',')[18], '2')  # bottom center
+        self.assertIsNone(a.overlay_ass(twist, duration=8.0, caption_seconds=0))
+        self.assertNotIn('voice_line', a.twist_prompt(SOURCE))
 
 
 class Facebook(unittest.TestCase):

@@ -110,9 +110,13 @@ GTA stream clips to funny animal and brainrot Shorts. `animal_shorts.py` runs in
    (all-time / 30 days / 7 days). Every 3rd cycle (`long_form_every`) searches long compilations instead and cuts
    their most-replayed 30 s (intro skipped). Channels over `max_channel_subscribers` (default 5M) and
    `skip_channels` are left out: big media channels Content-ID everything.
-2. **Twist**: the local vision model (`qwen3-vl:4b-instruct`) describes four frames; `qwen3:8b` writes a hook title,
-   top hook text, a spoken reaction (Chatterbox/Edge voice) and 2-3 captions. Clip sits in the middle, hook band
-   above, captions below; the source's own watermark is left as it is.
+2. **Check and edit**: sources whose title, description or tags say AI, animation, cartoon, Pixar and so on are
+   skipped before download. The local vision model (`qwen3-vl:4b-instruct`) then looks at four frames, says what
+   happens and whether it is real footage; cartoons, AI clips and games are refused even when they show an animal.
+   `qwen3:8b` writes the title and a 2 to 6 word hook. The clip fills the whole 9:16 frame with its own sound (no
+   narration, no blurred border). Vertical sources are just scaled; wider ones are cropped to 9:16 around where the
+   motion is, falling back to the center when the clip is calm. The hook shows at the bottom center, above the
+   Shorts/Reels caption band, for the first `caption_seconds` (5, 0 turns it off).
 3. **Credit**: the description always names the original channel and links the original video (with `&t=` for
    long-form clips). Nothing is credited on screen.
 4. **Copyright gate**: uploads go up **private**. After `check_minutes` (30) the next tick reads YouTube's verdict:
