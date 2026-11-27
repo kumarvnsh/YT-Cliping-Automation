@@ -78,6 +78,10 @@ class Animals(unittest.TestCase):
         self.assertIsNone(a.real_footage({'seen': 'Two puppies tumble off a couch.', 'footage': 'real'}))
         self.assertIsNone(a.real_footage({'seen': '', 'footage': ''}))  # vision model unavailable: do not block
         self.assertIn('no animals', a.real_footage({'seen': 'A car slides on ice.', 'footage': 'real'}))
+        # 27 Nov reference: a man rings the bell on a giant grass cat; no living animal at all.
+        giant = {'seen': 'A man rings a bell on the collar of a giant topiary cat statue.', 'footage': ''}
+        self.assertIn('statue', a.real_footage(giant))
+        self.assertIn('object', a.real_footage({**giant, 'seen': 'A man taps a huge green cat.', 'footage': 'object'}))
 
     def test_sources_that_call_themselves_ai_or_cartoon_are_skipped_before_download(self):
         cfg = a.settings({})
@@ -86,6 +90,12 @@ class Animals(unittest.TestCase):
         real = video('real', 2_000_000); real['snippet']['title'] = 'My cat said no (rain day)'
         self.assertEqual([c['id'] for c in a.rank([ai, toon, real], set(), 'OWN', cfg)], ['real'])
         self.assertEqual(a.synthetic_words('Cat zoomies', 'filmed on my phone', ['cats']), [])
+        self.assertEqual(a.synthetic_words('He touched the bell', '', ['giant cat statue']), ['statue'])
+
+    def test_searches_lean_on_kids_and_pets(self):
+        queries = a.settings({})['queries']
+        self.assertGreaterEqual(sum(any(k in q for k in ('kid', 'baby', 'toddler')) for q in queries), 10)
+        self.assertFalse(any(w in q for q in queries for w in ('wild', 'goat', 'cow', 'monkey', 'raccoon')))
 
 
 class Framing(unittest.TestCase):

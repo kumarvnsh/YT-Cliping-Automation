@@ -23,15 +23,16 @@ CATEGORY = '15'  # Pets & Animals
 MAX_SECONDS = 59.0
 
 DEFAULTS = {
-    # Real funny animal clips only. A wide, specific list so searches reach far past the same top 50 viral clips;
-    # titles stay broad anyway (SPECIFIC_ANIMALS), so naming species here only widens the pool.
-    'queries': ['funny animal video', 'funny cats', 'funny dogs', 'funny animals', 'funny pets', 'animal fails',
-                'funny animal moments', 'cat zoomies', 'dramatic cat', 'dog reaction funny', 'puppy being silly',
-                'husky talking back', 'golden retriever funny', 'cat knocking things over', 'dog caught red handed',
-                'funny parrot talking', 'screaming goat', 'funny horse', 'funny cow', 'funny duck', 'goose chasing',
-                'raccoon stealing', 'funny monkey', 'capybara chill', 'otter funny', 'funny hamster',
-                'funny bird', 'farm animals funny', 'cat vs cucumber', 'pets being dramatic', 'animal sneeze',
-                'dog guilty face', 'cat jump fail', 'baby animals funny', 'wild animal funny moment'],
+    # Owner (27 Nov): real pets being funny, above all kids and pets together. Cats and dogs first, a few other
+    # pets for variety. Titles stay broad anyway (SPECIFIC_ANIMALS), so naming species here only steers the search.
+    'queries': ['kids and dogs funny', 'baby and dog funny moments', 'toddler and cat funny', 'baby and cat funny',
+                'kid and puppy funny', 'dog protects baby funny', 'cat vs baby', 'dog vs kid', 'baby laughing at dog',
+                'kids and pets funny moments', 'toddler and puppy', 'dog babysitting kid funny',
+                'funny cats', 'funny dogs', 'funny pets', 'funny cat moments', 'funny dog moments',
+                'cat zoomies', 'dramatic cat', 'dog reaction funny', 'puppy being silly', 'husky talking back',
+                'golden retriever funny', 'cat knocking things over', 'dog caught red handed', 'dog guilty face',
+                'cat jump fail', 'cat vs cucumber', 'pets being dramatic', 'funny kitten', 'funny puppy',
+                'funny parrot talking', 'funny hamster', 'funny bunny'],
     'search_orders': ['viewCount', 'relevance'],  # alternate, so it is not always the same most-viewed few
     'min_views': 1_000_000,
     # Quality: a reupload farm's clip has views but few likes. Below this like share it is skipped (when likes show).
@@ -133,7 +134,7 @@ def rank(items, used, own_channel, cfg, subscribers=None, long=False, avoid_chan
 # Words a cartoon or AI-made "animal" clip gives itself away with in its title, description or tags.
 SYNTHETIC_WORDS = set('''ai aiart aivideo aivideos aigenerated aianimation aianimals aicat aicats aidog aidogs aipets
 aistory aishorts animation animations animated animator cartoon cartoons cartoony cgi pixar 3danimation
-sora veo veo3 kling klingai midjourney hailuo runwayml'''.split())
+sora veo veo3 kling klingai midjourney hailuo runwayml statue statues sculpture topiary'''.split())
 
 
 def synthetic_words(title, description='', tags=()):
@@ -199,7 +200,7 @@ def long_window(c, cfg):
 def describe_clip(src, model, frames=4):
     """What happens in the clip and whether it is real camera footage, from a local vision model.
 
-    Returns {'seen': '3 sentences', 'footage': 'real' | 'cartoon' | 'ai' | 'game' | ''}; both are '' when the
+    Returns {'seen': '3 sentences', 'footage': 'real' | 'cartoon' | 'ai' | 'object' | 'game' | ''}; both are '' when the
     model is unavailable, so a missing model never blocks a clip."""
     import base64
     import json
@@ -224,8 +225,10 @@ def describe_clip(src, model, frames=4):
                        'moment. Plain facts only.",\n'
                        ' "footage": "real" if this is real camera footage of real animals; "cartoon" if it is a '
                        'drawn, 2D or 3D animation (Pixar-like characters, big glossy eyes, toy-like colours); "ai" if '
-                       'it looks AI-generated (too smooth, melting details, impossible scenes); "game" if it is a '
-                       'video game}'),
+                       'it looks AI-generated (too smooth, melting details, impossible scenes, an animal far '
+                       'bigger than real life or made of grass, plants, food or another material); "object" if the '
+                       'only animal is a statue, sculpture, toy, costume, inflatable or plush; "game" if it is a '
+                       'video game. Answer "real" ONLY for a living animal filmed with a camera.}'),
             'options': {'temperature': 0.1, 'num_predict': 220, 'num_ctx': 8192}}, timeout=240)
         response.raise_for_status()
         raw = response.json().get('response', '')
@@ -235,7 +238,7 @@ def describe_clip(src, model, frames=4):
             data = {'what': raw}
         seen = ' '.join(str(data.get('what') or '').split())[:600]
         footage = str(data.get('footage') or '').strip().casefold()
-        return {'seen': seen, 'footage': footage if footage in ('real', 'cartoon', 'ai', 'game') else ''}
+        return {'seen': seen, 'footage': footage if footage in ('real', 'cartoon', 'ai', 'object', 'game') else ''}
     except Exception:
         return {'seen': '', 'footage': ''}
 
@@ -243,7 +246,7 @@ def describe_clip(src, model, frames=4):
 def real_footage(look):
     """None when the clip may be posted, else why not. Shotsnip posts real animals only: a cartoon, an AI clip
     or a game is refused even when it shows an animal, and so is a clip whose description names no animal."""
-    if look.get('footage') in ('cartoon', 'ai', 'game'):
+    if look.get('footage') in ('cartoon', 'ai', 'object', 'game'):
         return f"not real footage ({look['footage']}): {look.get('seen', '')[:100]}"
     fake = synthetic_words(look.get('seen', ''))  # the model said "animated" or "cartoon" in its own words
     if fake:
@@ -278,8 +281,8 @@ def twist_prompt(c, avoid=()):
     recent = ('Recent Shotsnip titles (do not repeat their wording):\n' + '\n'.join(f'- {t}' for t in avoid) + '\n'
               if avoid else '')
     return (
-        "You are the writer for Shotsnip, a Shorts channel that re-shares viral funny animal clips (cats, dogs, "
-        "pets, farm and wild animals), full screen with one short line of text.\n"
+        "You are the writer for Shotsnip, a Shorts channel that re-shares viral funny clips of real pets "
+        "(cats, dogs and other pets, often with kids), full screen with one short line of text.\n"
         f"{seen}Source title: {c['title']}\nSource description: {c['description'][:300]}\n"
         f"Tags: {', '.join(c['tags'][:12])}\n{recent}\n"
         "Base the hook on what happens. Reply with ONLY a JSON object:\n"
