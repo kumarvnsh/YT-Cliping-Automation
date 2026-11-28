@@ -102,6 +102,9 @@ class Animals(unittest.TestCase):
         self.assertIsNotNone(a.clean_frame({**clean, 'marks': '@funnypaws.daily'}))
         self.assertIsNotNone(a.clean_frame({**clean, 'marks': 'petclips.com'}))
         self.assertIsNotNone(a.clean_frame({**clean, 'seen': 'A cat falls off a sofa while a TikTok logo floats.'}))
+        # 28 Nov Facebook post: "Sorry Mom, I didn't mean to hurt Julie" was burned in by the first uploader.
+        self.assertIn('caption', a.clean_frame({**clean, 'caption': True, 'marks': 'Sorry Mom, I didnt mean to'}))
+        self.assertTrue(a._yes('true') and a._yes(True) and not a._yes('false') and not a._yes(None))
 
     def test_sources_reposted_from_tiktok_or_another_creator_are_skipped_before_download(self):
         cfg = a.settings({})

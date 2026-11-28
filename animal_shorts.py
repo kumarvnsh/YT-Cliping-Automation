@@ -219,14 +219,14 @@ def describe_clip(src, model, frames=4):
     """What happens in the clip and whether it is real camera footage, from a local vision model.
 
     Returns {'seen': '3 sentences', 'footage': 'real' | 'cartoon' | 'ai' | 'object' | 'game' | '',
-    'watermark': True | False, 'marks': 'the logo or name it read'}. Everything is empty or False when the model is
+    'watermark': True | False, 'caption': True | False, 'marks': 'the logo, name or caption it read'}. Everything is empty or False when the model is
     unavailable, so a missing model never blocks a clip."""
     import base64
     import json
     import requests
     from commentary import media_seconds
     from live_clipper import ffmpeg
-    empty = {'seen': '', 'footage': '', 'watermark': False, 'marks': ''}
+    empty = {'seen': '', 'footage': '', 'watermark': False, 'caption': False, 'marks': ''}
     try:
         seconds = media_seconds(src)
         images = []
@@ -252,8 +252,11 @@ def describe_clip(src, model, frames=4):
                        ' "watermark": true if ANY frame shows a watermark or logo burned into the video (TikTok, '
                        'Instagram, CapCut, Kwai or any app or channel logo, often small and semi-transparent in a '
                        'corner or moving around), or an @username, channel name or website written on the video; '
-                       'false otherwise (a caption that only describes the scene does not count),\n'
-                       ' "marks": "the exact logo, @username or channel name you read, or empty"}'),
+                       'false otherwise,\n'
+                       ' "caption": true if ANY frame has words added on top of the video by an editor (a caption, '
+                       'subtitle, quote, meme text or title in any language); false if the only text is part of the '
+                       'real scene, such as a sign, a label or a T-shirt,\n'
+                       ' "marks": "the exact logo, @username, channel name or caption text you read, or empty"}'),
             'options': {'temperature': 0.1, 'num_predict': 300, 'num_ctx': 8192}}, timeout=240)
         response.raise_for_status()
         raw = response.json().get('response', '')
@@ -264,11 +267,15 @@ def describe_clip(src, model, frames=4):
         seen = ' '.join(str(data.get('what') or '').split())[:600]
         footage = str(data.get('footage') or '').strip().casefold()
         marks = ' '.join(str(data.get('marks') or '').split())[:100]
-        mark = data.get('watermark') is True or str(data.get('watermark')).strip().casefold() == 'true'
+        mark = _yes(data.get('watermark'))
         return {'seen': seen, 'footage': footage if footage in ('real', 'cartoon', 'ai', 'object', 'game') else '',
-                'watermark': bool(mark or brand_marks(marks)), 'marks': marks}
+                'watermark': bool(mark or brand_marks(marks)), 'caption': _yes(data.get('caption')), 'marks': marks}
     except Exception:
         return empty
+
+
+def _yes(value):
+    return value is True or str(value).strip().casefold() == 'true'
 
 
 ON_VIDEO_BRANDS = REPOST_WORDS | {'instagram', 'snapchat', 'facebook'}
@@ -282,7 +289,10 @@ def brand_marks(text):
 
 
 def clean_frame(look):
-    """None when no watermark, logo or other channel's name is on the video, else why the clip is refused."""
+    """None when the video is clean, else why the clip is refused. Owner, 28 Nov: no watermark, logo or other
+    channel's name, and no caption burned in by whoever posted it first (a sure sign of a repost)."""
+    if look.get('caption'):
+        return 'someone else\'s caption burned into the video: ' + (look.get('marks') or '')[:100]
     if look.get('watermark') or brand_marks(look.get('marks')) or brand_marks(look.get('seen')):
         return 'watermark or another channel\'s name on the video: ' + (look.get('marks') or look.get('seen', ''))[:100]
     return None
